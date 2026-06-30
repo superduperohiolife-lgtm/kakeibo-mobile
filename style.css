@@ -1,0 +1,115 @@
+:root {
+  --green: #1f7a5a;
+  --green-dark: #155c43;
+  --bg: #f4f6f5;
+  --card: #ffffff;
+  --text: #1c2521;
+  --muted: #6b7a73;
+  --border: #e2e8e4;
+  --extra: #b5651d;
+  --error: #c0392b;
+  font-family: "Meiryo UI", "Hiragino Kaku Gothic ProN", -apple-system, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  padding-top: calc(14px + env(safe-area-inset-top));
+  background: var(--green);
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.app-header h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 600; }
+.logo { font-size: 22px; }
+.icon-btn {
+  background: rgba(255,255,255,.2);
+  border: none; color: #fff; font-size: 18px;
+  width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+}
+
+main { padding: 14px; max-width: 560px; margin: 0 auto; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.card h2 { font-size: 16px; margin: 0 0 10px; }
+.card h3 { font-size: 14px; margin: 16px 0 8px; color: var(--muted); }
+
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.error { color: var(--error); font-size: 13px; min-height: 16px; }
+
+input[type=password], input[type=text], input[type=number], input[type=date], select {
+  width: 100%; padding: 11px 12px; border: 1px solid var(--border);
+  border-radius: 10px; font-size: 16px; margin-bottom: 10px; background: #fff;
+}
+
+button.primary {
+  width: 100%; padding: 13px; border: none; border-radius: 10px;
+  background: var(--green); color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+}
+button.primary:disabled { background: #aebdb6; }
+button.primary:active { background: var(--green-dark); }
+
+.upload-zone {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 28px; border: 2px dashed var(--border); border-radius: 12px;
+  color: var(--muted); cursor: pointer; margin-bottom: 12px;
+}
+.upload-icon { font-size: 36px; }
+
+.preview-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.preview-list img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+
+.status { font-size: 13px; min-height: 16px; margin: 8px 0 0; }
+.status.ok { color: var(--green); }
+.status.err { color: var(--error); }
+
+.summary-head { display: flex; justify-content: space-between; align-items: baseline; }
+
+.totals { display: flex; gap: 8px; margin: 12px 0; }
+.total-item {
+  flex: 1; background: var(--bg); border-radius: 10px; padding: 12px 8px; text-align: center;
+}
+.total-item .label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.total-item .value { font-size: 18px; font-weight: 700; }
+.total-all { background: #e7f4ee; }
+.total-all .value { color: var(--green); }
+
+.review-badge {
+  background: #fff3e0; color: var(--extra); border: 1px solid #f0d8b8;
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 8px;
+}
+
+.recent-list { list-style: none; padding: 0; margin: 0; }
+.recent-list li {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px;
+}
+.recent-list li:last-child { border-bottom: none; }
+.recent-list .r-store { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-list .r-amt { font-weight: 600; }
+.recent-list .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+.tag.daily { background: #e7f4ee; color: var(--green); }
+.tag.extra { background: #fbe9d8; color: var(--extra); }
+.tag.review { background: #fff3e0; color: var(--extra); }
+
+.text-link { display: inline-block; margin-top: 14px; color: var(--green); font-size: 14px; text-decoration: none; }

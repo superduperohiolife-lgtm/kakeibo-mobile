@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1f7a5a">
+  <title>写真で家計簿</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <span class="logo">💰</span>
+    <h1>写真で家計簿</h1>
+    <button id="reloadBtn" class="icon-btn" title="更新">⟳</button>
+  </header>
+
+  <main id="app">
+    <!-- 合言葉入力 -->
+    <section id="authView" class="card hidden">
+      <h2>合言葉を入力</h2>
+      <p class="muted">この端末で初回のみ。家族で共有している合言葉を入力してください。</p>
+      <input type="password" id="tokenInput" placeholder="合言葉" autocomplete="off">
+      <button id="saveTokenBtn" class="primary">保存して開始</button>
+      <p id="authError" class="error"></p>
+    </section>
+
+    <!-- アップロード -->
+    <section id="uploadCard" class="card">
+      <h2>レシートを追加</h2>
+      <label for="fileInput" class="upload-zone" id="dropZone">
+        <span class="upload-icon">📷</span>
+        <span>タップして撮影 / 写真を選択</span>
+      </label>
+      <input type="file" id="fileInput" accept="image/*" capture="environment" multiple hidden>
+      <div id="previewList" class="preview-list"></div>
+      <button id="uploadBtn" class="primary" disabled>アップロード</button>
+      <p id="uploadStatus" class="status"></p>
+      <p class="muted small">アップロードした写真は毎日22:30に自動で読み取られ、家計簿に反映されます。</p>
+    </section>
+
+    <!-- サマリ -->
+    <section id="summaryCard" class="card">
+      <div class="summary-head">
+        <h2 id="summaryMonth">今月のサマリ</h2>
+        <span id="summaryUpdated" class="muted small"></span>
+      </div>
+      <div class="totals">
+        <div class="total-item total-all">
+          <span class="label">合計</span>
+          <span class="value" id="totalAll">¥0</span>
+        </div>
+        <div class="total-item">
+          <span class="label">日常</span>
+          <span class="value" id="totalDaily">¥0</span>
+        </div>
+        <div class="total-item">
+          <span class="label">臨時</span>
+          <span class="value" id="totalExtra">¥0</span>
+        </div>
+      </div>
+      <div id="reviewBadge" class="review-badge hidden"></div>
+      <h3>直近の取引</h3>
+      <ul id="recentList" class="recent-list"><li class="muted">読み込み中…</li></ul>
+      <a id="webLink" class="text-link" href="#" target="_blank" rel="noopener">詳しい家計簿ダッシュボードを開く →</a>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(function(){});
+    }
+  </script>
+</body>
+</html>
