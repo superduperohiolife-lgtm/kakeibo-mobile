@@ -1,80 +1,167 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#1f7a5a">
-  <title>写真で家計簿</title>
-  <link rel="manifest" href="manifest.json">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kendo Tournament Manager</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<!-- ===== Login gate ===== -->
+<div id="loginGate" class="gate">
+  <div class="gate-card">
+    <h1>Kendo Tournament</h1>
+    <p class="gate-sub">Enter your access key</p>
+    <input id="gateApi" placeholder="GAS Web App URL (…/exec)">
+    <input id="gateKey" placeholder="Access key" autocomplete="off">
+    <button id="gateEnter" class="primary">Enter</button>
+    <p class="gate-hint">Your role (View / Edit / Admin) is detected from the key.
+       Most members only need the View key.</p>
+    <p id="gateErr" class="gate-err"></p>
+  </div>
+</div>
+
+<!-- ===== App ===== -->
+<div id="app" class="hidden">
   <header class="app-header">
-    <span class="logo">💰</span>
-    <h1>写真で家計簿</h1>
-    <button id="reloadBtn" class="icon-btn" title="更新">⟳</button>
+    <h1>Kendo Tournament</h1>
+    <select id="divisionSelect" aria-label="Division"></select>
+    <span id="roleBadge" class="role-badge"></span>
   </header>
 
-  <main id="app">
-    <!-- 合言葉入力 -->
-    <section id="authView" class="card hidden">
-      <h2>合言葉を入力</h2>
-      <p class="muted">この端末で初回のみ。家族で共有している合言葉を入力してください。</p>
-      <input type="password" id="tokenInput" placeholder="合言葉" autocomplete="off">
-      <button id="saveTokenBtn" class="primary">保存して開始</button>
-      <p id="authError" class="error"></p>
+  <main>
+    <!-- View (3 sub-tabs) -->
+    <section id="view-view" class="tabpane active">
+      <div class="seg" role="tablist">
+        <button class="seg-btn active" data-sub="placement">Placement</button>
+        <button class="seg-btn" data-sub="elim">Elimination</button>
+        <button class="seg-btn" data-sub="list">Match List</button>
+      </div>
+      <div id="subPlacement" class="subpane"></div>
+      <div id="subElim" class="subpane hidden">
+        <div class="zoombar">
+          <button data-z="out">−</button><span id="zoomLbl">100%</span><button data-z="in">+</button>
+          <button data-z="fit">Fit</button>
+        </div>
+        <div id="courtFilter" class="court-filter"></div>
+        <div id="elimScroll" class="elim-scroll"></div>
+      </div>
+      <div id="subList" class="subpane hidden"></div>
+      <p class="meta" id="pollStatus"></p>
     </section>
 
-    <!-- アップロード -->
-    <section id="uploadCard" class="card">
-      <h2>レシートを追加</h2>
-      <label for="fileInput" class="upload-zone" id="dropZone">
-        <span class="upload-icon">📷</span>
-        <span>タップして撮影 / 写真を選択</span>
-      </label>
-      <input type="file" id="fileInput" accept="image/*" capture="environment" multiple hidden>
-      <div id="previewList" class="preview-list"></div>
-      <button id="uploadBtn" class="primary" disabled>アップロード</button>
-      <p id="uploadStatus" class="status"></p>
-      <p class="muted small">アップロードした写真は毎日22:30に自動で読み取られ、家計簿に反映されます。</p>
+    <!-- Result entry (edit+) -->
+    <section id="view-input" class="tabpane">
+      <h2>Result Entry</h2>
+      <div id="readyMatches"></div>
+      <h3>Recorded (undo available)</h3>
+      <div id="doneMatches"></div>
     </section>
 
-    <!-- サマリ -->
-    <section id="summaryCard" class="card">
-      <div class="summary-head">
-        <h2 id="summaryMonth">今月のサマリ</h2>
-        <span id="summaryUpdated" class="muted small"></span>
-      </div>
-      <div class="totals">
-        <div class="total-item total-all">
-          <span class="label">合計</span>
-          <span class="value" id="totalAll">¥0</span>
+    <!-- Admin -->
+    <section id="view-admin" class="tabpane">
+      <h2>Admin</h2>
+
+      <details class="card" open><summary>Bulk edit (Google Sheets)</summary>
+        <p class="meta">Open the spreadsheet to edit players, entries and matches in bulk.</p>
+        <a id="sheetLink" class="btn-link" target="_blank" rel="noopener">Open spreadsheet ↗</a>
+      </details>
+
+      <details class="card"><summary>Create tournament</summary>
+        <label>Tournament name <input id="newTourName"></label>
+        <label>Date <input id="newTourDate" type="date"></label>
+        <button id="btnCreateTour" class="primary">Create tournament</button>
+      </details>
+
+      <details class="card"><summary>Create division</summary>
+        <label>Tournament <select id="tourSelect"></select></label>
+        <label>Division name <input id="newDivName" placeholder="e.g. Jr Youth Girls"></label>
+        <label class="row"><input id="chkPlacement" type="checkbox" checked> Placement round (AUSKF style)</label>
+        <label>Courts <input id="courtCount" type="number" min="1" max="8" value="2"></label>
+        <div id="placementOpts">
+          <label>Placement groups (= half of slots) <input id="groupCount" type="number" min="2" max="60" value="14"></label>
         </div>
-        <div class="total-item">
-          <span class="label">日常</span>
-          <span class="value" id="totalDaily">¥0</span>
+        <div id="elimOpts" class="hidden">
+          <label>Bracket size <select id="bracketSize">
+            <option>4</option><option>8</option><option selected>16</option>
+            <option>32</option><option>64</option><option>128</option>
+          </select></label>
+          <label class="row"><input id="chkThird" type="checkbox"> 3rd place match</label>
         </div>
-        <div class="total-item">
-          <span class="label">臨時</span>
-          <span class="value" id="totalExtra">¥0</span>
-        </div>
-      </div>
-      <div id="reviewBadge" class="review-badge hidden"></div>
-      <h3>直近の取引</h3>
-      <ul id="recentList" class="recent-list"><li class="muted">読み込み中…</li></ul>
-      <a id="webLink" class="text-link" href="#" target="_blank" rel="noopener">詳しい家計簿ダッシュボードを開く →</a>
+        <button id="btnCreateDiv" class="primary">Create division (generate bracket)</button>
+      </details>
+
+      <details class="card"><summary>Register players</summary>
+        <label>Filter by team <input id="teamFilter" list="teamList" placeholder="e.g. SCKF"></label>
+        <datalist id="teamList"></datalist>
+        <label>Search name <input id="nameFilter"></label>
+        <button id="btnSearchPlayers">Search</button>
+        <div id="playerList"></div>
+        <hr>
+        <label>Team <input id="newTeam" list="teamList"></label>
+        <label>Player name <input id="newName"></label>
+        <button id="btnAddPlayer" class="primary">Add to player master</button>
+        <p class="meta">For many players, use bulk edit (spreadsheet) above — it is much faster.</p>
+      </details>
+
+      <details class="card"><summary>Slot assignment (players / BYE)</summary>
+        <p class="meta">Select the division at the top, then assign. Finalize before matches start.</p>
+        <button id="btnLoadSlots">Load slots</button>
+        <div id="slotArea"></div>
+        <button id="btnSaveSlots" class="primary hidden">Save assignment</button>
+      </details>
+
+      <details class="card"><summary>Elimination seeding (round-1 links)</summary>
+        <p class="meta">Default is standard seeding (winners = top seeds, losers = lower seeds).
+          Edit any round-1 slot before matches start. Locked once results exist.</p>
+        <button id="btnLoadMap">Load seeding</button>
+        <div id="mapArea"></div>
+        <button id="btnSaveMap" class="primary hidden">Save seeding</button>
+      </details>
+
+      <details class="card"><summary>Courts</summary>
+        <p class="meta">Assign a court label to each match.</p>
+        <button id="btnLoadCourts">Load matches</button>
+        <div id="courtArea"></div>
+      </details>
     </section>
   </main>
 
-  <script src="config.js"></script>
-  <script src="app.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(function(){});
-    }
-  </script>
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="view-view">View</button>
+    <button class="tab" data-tab="view-input" data-min="edit">Entry</button>
+    <button class="tab" data-tab="view-admin" data-min="admin">Admin</button>
+  </nav>
+</div>
+
+<!-- Result dialog -->
+<dialog id="resultDialog">
+  <form method="dialog" id="resultForm">
+    <h3 id="rdTitle">Result</h3>
+    <div class="rd-players">
+      <button type="button" id="rdRedBtn" class="side red">Red</button>
+      <span class="vs">vs</span>
+      <button type="button" id="rdWhiteBtn" class="side white">White</button>
+    </div>
+    <p class="meta">Tap the winner, then choose point symbols (max 2).</p>
+    <div class="pointrow"><span class="lbl red-lbl">Red</span><div id="rdRedPts" class="chips"></div></div>
+    <div class="pointrow"><span class="lbl white-lbl">White</span><div id="rdWhitePts" class="chips"></div></div>
+    <label>Outcome
+      <select id="rdOutcome">
+        <option value="normal">Normal</option>
+        <option value="encho">Encho (overtime)</option>
+        <option value="fusen">Fusen — walkover (winner ○○)</option>
+      </select>
+    </label>
+    <div class="rd-actions">
+      <button type="button" id="rdCancel">Close</button>
+      <button type="button" id="rdSave" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
 </body>
 </html>
