@@ -27,9 +27,7 @@ body {
   padding-top: calc(14px + env(safe-area-inset-top));
   background: var(--green);
   color: #fff;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  position: static; /* 常時表示にしない（スクロールで隠れる） */
 }
 .app-header h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 600; }
 .logo { font-size: 22px; }
@@ -113,3 +111,63 @@ button.primary:active { background: var(--green-dark); }
 .tag.review { background: #fff3e0; color: var(--extra); }
 
 .text-link { display: inline-block; margin-top: 14px; color: var(--green); font-size: 14px; text-decoration: none; }
+
+/* ===== 撮影 / 写真選択の2ボタン ===== */
+.pick-row { display: flex; gap: 10px; margin-bottom: 12px; }
+.pick-row .upload-zone { flex: 1; margin-bottom: 0; padding: 20px 8px; }
+
+/* ===== 下スワイプ更新バー ===== */
+.ptr {
+  height: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: #e7f4ee; color: var(--green); font-size: 13px;
+  transition: height .15s ease;
+}
+.ptr.visible { border-bottom: 1px solid var(--border); }
+
+/* ===== 読み取り結果タブ ===== */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.tab {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 7px 12px; border-radius: 999px; font-size: 13px; cursor: pointer;
+  font-family: inherit;
+}
+.tab.active { background: var(--green); color: #fff; border-color: var(--green); }
+.tab-flag { font-size: 10px; opacity: .9; }
+
+.tab-panel { min-height: 40px; }
+
+.rc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.rc-store { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
+.rc-total { font-weight: 700; font-size: 16px; white-space: nowrap; }
+.rc-meta { margin: 4px 0 10px; }
+
+.item-list { list-style: none; padding: 0; margin: 0; }
+.item-list li {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 7px 0; border-bottom: 1px dashed var(--border); font-size: 14px;
+}
+.item-list li:last-child { border-bottom: none; }
+.item-list .i-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.item-list .i-price { font-weight: 600; white-space: nowrap; }
+
+/* ===== アップロード進捗リスト ===== */
+.progress-list { list-style: none; padding: 0; margin: 0; }
+.progress-list li {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.progress-list li:last-child { border-bottom: none; }
+.progress-list .p-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.progress-list .p-state { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--green); }
+.dot.review { background: var(--extra); }
+.dot.err { background: var(--error); }
+
+.spinner {
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--green);
+  display: inline-block; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -1,5 +1,5 @@
 /* sw.js — シンプルなアプリ枠キャッシュ（オフライン起動用）。データは常にオンライン取得。 */
-var CACHE = 'kakeibo-mobile-v1';
+var CACHE = 'kakeibo-mobile-v4';
 var ASSETS = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png'];
 

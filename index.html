@@ -12,10 +12,12 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- 下スワイプ更新インジケータ -->
+  <div id="ptr" class="ptr"><span id="ptrText">下に引いて更新</span></div>
+
   <header class="app-header">
     <span class="logo">💰</span>
     <h1>写真で家計簿</h1>
-    <button id="reloadBtn" class="icon-btn" title="更新">⟳</button>
   </header>
 
   <main id="app">
@@ -31,40 +33,29 @@
     <!-- アップロード -->
     <section id="uploadCard" class="card">
       <h2>レシートを追加</h2>
-      <label for="fileInput" class="upload-zone" id="dropZone">
-        <span class="upload-icon">📷</span>
-        <span>タップして撮影 / 写真を選択</span>
-      </label>
-      <input type="file" id="fileInput" accept="image/*" capture="environment" multiple hidden>
+      <div class="pick-row">
+        <label for="cameraInput" class="upload-zone">
+          <span class="upload-icon">📷</span>
+          <span>撮影する</span>
+        </label>
+        <label for="fileInput" class="upload-zone">
+          <span class="upload-icon">🖼️</span>
+          <span>写真を選ぶ</span>
+        </label>
+      </div>
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple hidden>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
       <div id="previewList" class="preview-list"></div>
       <button id="uploadBtn" class="primary" disabled>アップロード</button>
       <p id="uploadStatus" class="status"></p>
-      <p class="muted small">アップロードした写真は毎日22:30に自動で読み取られ、家計簿に反映されます。</p>
+      <p class="muted small">写真はアップロード後すぐに読み取り、結果を下に表示します。</p>
     </section>
 
-    <!-- サマリ -->
-    <section id="summaryCard" class="card">
-      <div class="summary-head">
-        <h2 id="summaryMonth">今月のサマリ</h2>
-        <span id="summaryUpdated" class="muted small"></span>
-      </div>
-      <div class="totals">
-        <div class="total-item total-all">
-          <span class="label">合計</span>
-          <span class="value" id="totalAll">¥0</span>
-        </div>
-        <div class="total-item">
-          <span class="label">日常</span>
-          <span class="value" id="totalDaily">¥0</span>
-        </div>
-        <div class="total-item">
-          <span class="label">臨時</span>
-          <span class="value" id="totalExtra">¥0</span>
-        </div>
-      </div>
-      <div id="reviewBadge" class="review-badge hidden"></div>
-      <h3>直近の取引</h3>
-      <ul id="recentList" class="recent-list"><li class="muted">読み込み中…</li></ul>
+    <!-- 読み取り結果（直近3レシートをタブ表示） -->
+    <section id="recentCard" class="card">
+      <h2>読み取り結果（直近3件）</h2>
+      <div id="recentTabs" class="tabs"></div>
+      <div id="recentPanel" class="tab-panel"><p class="muted">読み込み中…</p></div>
       <a id="webLink" class="text-link" href="#" target="_blank" rel="noopener">詳しい家計簿ダッシュボードを開く →</a>
     </section>
   </main>
