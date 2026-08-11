@@ -30,35 +30,129 @@
       <p id="authError" class="error"></p>
     </section>
 
-    <!-- アップロード -->
-    <section id="uploadCard" class="card">
-      <h2>レシートを追加</h2>
-      <div class="pick-row">
-        <label for="cameraInput" class="upload-zone">
-          <span class="upload-icon">📷</span>
-          <span>撮影する</span>
-        </label>
-        <label for="fileInput" class="upload-zone">
-          <span class="upload-icon">🖼️</span>
-          <span>写真を選ぶ</span>
-        </label>
-      </div>
-      <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple hidden>
-      <input type="file" id="fileInput" accept="image/*" multiple hidden>
-      <div id="previewList" class="preview-list"></div>
-      <button id="uploadBtn" class="primary" disabled>アップロード</button>
-      <p id="uploadStatus" class="status"></p>
-      <p class="muted small">写真はアップロード後すぐに読み取り、結果を下に表示します。</p>
-    </section>
+    <!-- ===== 撮るビュー ===== -->
+    <div id="captureView" class="view">
+      <!-- アップロード -->
+      <section id="uploadCard" class="card">
+        <h2>レシートを追加</h2>
+        <div class="pick-row">
+          <label for="cameraInput" class="upload-zone">
+            <span class="upload-icon">📷</span>
+            <span>撮影する</span>
+          </label>
+          <label for="fileInput" class="upload-zone">
+            <span class="upload-icon">🖼️</span>
+            <span>写真を選ぶ</span>
+          </label>
+        </div>
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple hidden>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
+        <div id="previewList" class="preview-list"></div>
+        <button id="uploadBtn" class="primary" disabled>アップロード</button>
+        <p id="uploadStatus" class="status"></p>
+        <p class="muted small">写真はアップロード後すぐに読み取り、結果を下に表示します。要確認になった場合は理由も出ます。</p>
+      </section>
 
-    <!-- 読み取り結果（直近3レシートをタブ表示） -->
-    <section id="recentCard" class="card">
-      <h2>読み取り結果（直近3件）</h2>
-      <div id="recentTabs" class="tabs"></div>
-      <div id="recentPanel" class="tab-panel"><p class="muted">読み込み中…</p></div>
-      <a id="webLink" class="text-link" href="#" target="_blank" rel="noopener">詳しい家計簿ダッシュボードを開く →</a>
-    </section>
+      <!-- 読み取り結果（直近3レシートをタブ表示） -->
+      <section id="recentCard" class="card">
+        <h2>読み取り結果（直近3件）</h2>
+        <div id="recentTabs" class="tabs"></div>
+        <div id="recentPanel" class="tab-panel"><p class="muted">読み込み中…</p></div>
+      </section>
+    </div>
+
+    <!-- ===== 家計簿（ダッシュボード）ビュー ===== -->
+    <div id="dashboardView" class="view hidden">
+      <!-- 月ナビ + 合計 -->
+      <section class="card dash-top">
+        <div class="month-nav">
+          <button id="monthPrev" class="nav-btn" aria-label="前の月">‹</button>
+          <div class="month-label">
+            <span id="monthText">—</span>
+            <span id="monthGenerated" class="muted small"></span>
+          </div>
+          <button id="monthNext" class="nav-btn" aria-label="次の月">›</button>
+        </div>
+
+        <div class="totals">
+          <div class="total-item total-all">
+            <span class="label">合計</span>
+            <span class="value" id="totAll">¥0</span>
+          </div>
+          <div class="total-item total-daily">
+            <span class="label">日常</span>
+            <span class="value" id="totDaily">¥0</span>
+          </div>
+          <div class="total-item total-extra">
+            <span class="label">臨時</span>
+            <span class="value" id="totExtra">¥0</span>
+          </div>
+        </div>
+        <div id="reviewBadge" class="review-badge hidden"></div>
+      </section>
+
+      <!-- 要確認（理由つき・タップで修正） -->
+      <section id="reviewCard" class="card hidden">
+        <h2>要確認</h2>
+        <div id="reviewChips" class="chips"></div>
+        <ul id="reviewList" class="recent-list tappable"></ul>
+        <p class="muted small">行をタップすると修正・削除できます。</p>
+      </section>
+
+      <!-- カテゴリ別 -->
+      <section class="card">
+        <h2>カテゴリ別</h2>
+        <div id="catChart" class="bar-chart"><p class="muted small">読み込み中…</p></div>
+      </section>
+
+      <!-- 日次推移 -->
+      <section class="card">
+        <h2>日次推移</h2>
+        <div id="trendChart" class="trend-chart"><p class="muted small">読み込み中…</p></div>
+      </section>
+
+      <!-- 予定 vs 実績 -->
+      <section id="planCard" class="card">
+        <h2>予定 vs 実績（臨時）</h2>
+        <div id="planChart" class="plan-chart"><p class="muted small">読み込み中…</p></div>
+      </section>
+
+      <!-- Claude分析 -->
+      <section id="analysisCard" class="card hidden">
+        <h2>AI分析</h2>
+        <div id="analysisBody" class="analysis-body"></div>
+        <p id="analysisMeta" class="muted small"></p>
+      </section>
+
+      <!-- 最近の取引 -->
+      <section class="card">
+        <h2>最近の取引</h2>
+        <ul id="dashRecent" class="recent-list tappable"><li class="muted">読み込み中…</li></ul>
+      </section>
+    </div>
   </main>
+
+  <!-- ===== 取引の修正モーダル ===== -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h3 id="modalTitle">取引の修正</h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button id="modalCancel" class="ghost">キャンセル</button>
+        <button id="modalSave" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 下部タブナビ ===== -->
+  <nav id="bottomNav" class="bottom-nav hidden">
+    <button class="nav-tab active" data-target="captureView">
+      <span class="nav-ico">📷</span><span class="nav-txt">撮る</span>
+    </button>
+    <button class="nav-tab" data-target="dashboardView">
+      <span class="nav-ico">📊</span><span class="nav-txt">家計簿</span>
+    </button>
+  </nav>
 
   <script src="config.js"></script>
   <script src="app.js"></script>

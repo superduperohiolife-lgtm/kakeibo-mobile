@@ -1,12 +1,14 @@
 :root {
   --green: #1f7a5a;
   --green-dark: #155c43;
+  --green-soft: #e7f4ee;
   --bg: #f4f6f5;
   --card: #ffffff;
   --text: #1c2521;
   --muted: #6b7a73;
   --border: #e2e8e4;
   --extra: #b5651d;
+  --extra-soft: #fbe9d8;
   --error: #c0392b;
   font-family: "Meiryo UI", "Hiragino Kaku Gothic ProN", -apple-system, system-ui, sans-serif;
 }
@@ -37,7 +39,10 @@ body {
   width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
 }
 
-main { padding: 14px; max-width: 560px; margin: 0 auto; }
+/* 下部ナビ分の余白を確保 */
+main { padding: 14px; padding-bottom: calc(78px + env(safe-area-inset-bottom)); max-width: 560px; margin: 0 auto; }
+
+.view.hidden { display: none; }
 
 .card {
   background: var(--card);
@@ -88,13 +93,14 @@ button.primary:active { background: var(--green-dark); }
   flex: 1; background: var(--bg); border-radius: 10px; padding: 12px 8px; text-align: center;
 }
 .total-item .label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-.total-item .value { font-size: 18px; font-weight: 700; }
-.total-all { background: #e7f4ee; }
+.total-item .value { font-size: 17px; font-weight: 700; }
+.total-all { background: var(--green-soft); }
 .total-all .value { color: var(--green); }
+.total-extra .value { color: var(--extra); }
 
 .review-badge {
   background: #fff3e0; color: var(--extra); border: 1px solid #f0d8b8;
-  border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 8px;
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 0;
 }
 
 .recent-list { list-style: none; padding: 0; margin: 0; }
@@ -103,11 +109,13 @@ button.primary:active { background: var(--green-dark); }
   padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px;
 }
 .recent-list li:last-child { border-bottom: none; }
-.recent-list .r-store { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-list .r-amt { font-weight: 600; }
+.recent-list .r-main { flex: 1; overflow: hidden; }
+.recent-list .r-store { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-list .r-sub { font-size: 11px; color: var(--muted); }
+.recent-list .r-amt { font-weight: 600; white-space: nowrap; text-align: right; }
 .recent-list .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
-.tag.daily { background: #e7f4ee; color: var(--green); }
-.tag.extra { background: #fbe9d8; color: var(--extra); }
+.tag.daily { background: var(--green-soft); color: var(--green); }
+.tag.extra { background: var(--extra-soft); color: var(--extra); }
 .tag.review { background: #fff3e0; color: var(--extra); }
 
 .text-link { display: inline-block; margin-top: 14px; color: var(--green); font-size: 14px; text-decoration: none; }
@@ -120,7 +128,7 @@ button.primary:active { background: var(--green-dark); }
 .ptr {
   height: 0; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
-  background: #e7f4ee; color: var(--green); font-size: 13px;
+  background: var(--green-soft); color: var(--green); font-size: 13px;
   transition: height .15s ease;
 }
 .ptr.visible { border-bottom: 1px solid var(--border); }
@@ -151,6 +159,8 @@ button.primary:active { background: var(--green-dark); }
 .item-list .i-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .item-list .i-price { font-weight: 600; white-space: nowrap; }
 
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+
 /* ===== アップロード進捗リスト ===== */
 .progress-list { list-style: none; padding: 0; margin: 0; }
 .progress-list li {
@@ -171,3 +181,143 @@ button.primary:active { background: var(--green-dark); }
   display: inline-block; animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== ダッシュボード：月ナビ ===== */
+.dash-top { padding-bottom: 12px; }
+.month-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.month-nav .month-label { flex: 1; text-align: center; display: flex; flex-direction: column; gap: 1px; }
+.month-nav #monthText { font-size: 17px; font-weight: 700; }
+.nav-btn {
+  width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 22px; line-height: 1; cursor: pointer;
+  font-family: inherit;
+}
+.nav-btn:disabled { opacity: .35; }
+.nav-btn:active { background: var(--border); }
+
+/* ===== ダッシュボード：カテゴリ棒グラフ ===== */
+.bar-chart { display: flex; flex-direction: column; gap: 10px; }
+.bar-row { font-size: 13px; }
+.bar-row .bar-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.bar-row .bar-cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .bar-val { font-weight: 700; white-space: nowrap; }
+.bar-track { height: 10px; border-radius: 999px; background: var(--bg); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; background: var(--green); min-width: 3px; transition: width .3s ease; }
+
+/* ===== ダッシュボード：日次推移 ===== */
+.trend-chart { }
+.trend-bars { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding-top: 6px; }
+.trend-bars .tb {
+  flex: 1; min-width: 4px; background: var(--green); border-radius: 3px 3px 0 0;
+  min-height: 2px; transition: height .3s ease;
+}
+.trend-axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.trend-peak { margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+/* ===== ダッシュボード：予定 vs 実績 ===== */
+.plan-chart { display: flex; flex-direction: column; gap: 14px; }
+.plan-row { font-size: 13px; }
+.plan-row .plan-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.plan-row .plan-cat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-row .plan-num { white-space: nowrap; font-size: 12px; color: var(--muted); }
+.plan-row .plan-num b { color: var(--text); }
+.plan-track { position: relative; height: 12px; border-radius: 999px; background: var(--extra-soft); overflow: hidden; }
+.plan-fill { height: 100%; border-radius: 999px; background: var(--extra); min-width: 2px; transition: width .3s ease; }
+.plan-fill.over { background: var(--error); }
+.plan-pct { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.plan-pct.over { color: var(--error); font-weight: 700; }
+
+/* ===== ダッシュボード：AI分析 ===== */
+.analysis-body { font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+
+/* ===== 下部タブナビ ===== */
+.bottom-nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  display: flex; background: var(--card); border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: 0 -1px 6px rgba(0,0,0,.04);
+}
+.nav-tab {
+  flex: 1; border: none; background: none; cursor: pointer; font-family: inherit;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 9px 0 8px; color: var(--muted); font-size: 11px;
+}
+.nav-tab .nav-ico { font-size: 21px; line-height: 1; filter: grayscale(1) opacity(.6); }
+.nav-tab.active { color: var(--green); font-weight: 700; }
+.nav-tab.active .nav-ico { filter: none; }
+
+/* ===================================================================
+   2026-08 追加: 要確認の理由表示 / 取引の修正モーダル
+   =================================================================== */
+
+/* 要確認の理由ブロック（レシート詳細・修正モーダルの先頭） */
+.review-note {
+  background: #fff3e0; border: 1px solid #f0d8b8; border-radius: 10px;
+  padding: 10px 12px; margin: 10px 0 12px; font-size: 13px; color: #8a4b0f;
+}
+.review-note .rv-list { list-style: none; padding: 0; margin: 0; }
+.review-note .rv-list li { padding: 3px 0; }
+.review-note .rv-list b { font-weight: 700; }
+.review-note .rv-hint { display: block; font-size: 11px; color: #a5713c; margin-top: 1px; }
+
+/* 要確認カードの理由チップ */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  background: #fff3e0; color: var(--extra); border: 1px solid #f0d8b8;
+  border-radius: 999px; padding: 3px 10px; font-size: 12px; white-space: nowrap;
+}
+
+/* 一覧行に出す「なぜ要確認か」の1行 */
+.recent-list .r-why {
+  font-size: 12px; color: var(--extra); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recent-list.tappable li { cursor: pointer; }
+.recent-list.tappable li:active { background: var(--bg); }
+
+/* 明細合計と総額の突合行 */
+.item-sum { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* アップロード進捗に添える要確認理由 */
+.progress-list .p-review {
+  flex-basis: 100%; font-size: 11px; color: var(--extra); margin-top: 2px;
+}
+.progress-list li { flex-wrap: wrap; }
+
+/* 「この取引を修正」ボタン */
+.edit-btn {
+  width: 100%; margin-top: 12px; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 14px; font-family: inherit; cursor: pointer;
+}
+.edit-btn:active { background: var(--border); }
+
+/* ===== モーダル ===== */
+body.modal-open { overflow: hidden; }
+.modal {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(16, 26, 22, .45);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.modal.hidden { display: none !important; }
+.modal-card {
+  background: var(--card); width: 100%; max-width: 560px;
+  border-radius: 16px 16px 0 0; padding: 18px 16px;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  max-height: 88vh; overflow-y: auto;
+}
+.modal-card h3 { margin: 0 0 12px; font-size: 16px; }
+.modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+.modal-actions button { flex: 1; }
+button.ghost {
+  padding: 13px; border-radius: 10px; border: 1px solid var(--border);
+  background: #fff; color: var(--text); font-size: 16px; font-family: inherit; cursor: pointer;
+}
+.fld { display: block; font-size: 12px; color: var(--muted); margin: 2px 0 4px; }
+.fld-note { margin: -4px 0 10px; }
+.del-btn {
+  width: 100%; margin-top: 14px; padding: 11px; border-radius: 10px;
+  border: 1px solid #eccfcb; background: #fdf1f0; color: var(--error);
+  font-size: 14px; font-family: inherit; cursor: pointer;
+}
+.del-btn:active { background: #f8e3e1; }
