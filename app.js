@@ -504,9 +504,15 @@
     (isCurrent ? apiGet('dashboard') : apiGet('overview', { month: selMonth }))
       .then(function (res) {
         if (!res || res.error) { seeError((res && res.error) || '取得できませんでした'); return; }
-        // dashboard.json が古い月のものだったらライブ集計に切り替える
-        if (isCurrent && res.month !== selMonth) return apiGet('overview', { month: selMonth }).then(renderSee);
-        renderSee(res, isCurrent);
+        // dashboard.json が古い月のもの、または前月比を持たない旧世代ならライブ集計に切り替える
+        // （その場合も保存済みのAI分析だけは引き継ぐ）
+        if (isCurrent && (res.month !== selMonth || !res.prev)) {
+          return apiGet('overview', { month: selMonth }).then(function (live) {
+            if (live && !live.error && res.analysis && live.month === res.month) live.analysis = res.analysis;
+            renderSee(live);
+          });
+        }
+        renderSee(res);
       })
       .catch(function () { seeError('接続エラー'); });
   }
@@ -516,11 +522,11 @@
     el('dayC').innerHTML = ''; el('difC').innerHTML = '';
   }
 
-  function renderSee(d, isCurrent) {
+  function renderSee(d) {
     d = d || {};
     var totals = d.totals || { all: 0, daily: 0, extraordinary: 0 };
     var prev = d.prev || null;
-    el('monthGenerated').textContent = isCurrent ? fmtStamp(d.generated_at) : 'ライブ集計';
+    el('monthGenerated').textContent = d.generated_at ? fmtStamp(d.generated_at) : 'ライブ集計';
 
     el('totAll').textContent = yen(totals.all);
     el('totDaily').textContent = yen(totals.daily);
@@ -536,7 +542,7 @@
     renderDaily(d.daily_trend || []);
     renderDiff(d.by_category || [], prev ? (prev.by_category || []) : [], prev ? prev.month : null);
     renderPlan(d.plan_vs_actual || []);
-    renderAnalysis(isCurrent ? d.analysis : null);
+    renderAnalysis(d.analysis || null);
   }
 
   function setDelta(id, now, before) {
