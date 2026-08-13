@@ -701,6 +701,10 @@
     el('monthText').textContent = monthJa(selMonth);
     el('monthNext').disabled = (selMonth >= currentMonth());
     el('monthGenerated').textContent = '読み込み中…';
+    // 集計を取り直している間に ¥0 と見えてしまわないようにする
+    ['totAll', 'totDaily', 'totExtra'].forEach(function (id) { el(id).textContent = '—'; });
+    ['dltAll', 'dltDaily', 'dltExtra'].forEach(function (id) { el(id).textContent = ''; });
+    el('prevNote').textContent = '';
 
     var isCurrent = (selMonth === currentMonth());
     (isCurrent ? apiGet('dashboard') : apiGet('overview', { month: selMonth }))
