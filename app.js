@@ -36,6 +36,11 @@
 
   var el = function (id) { return document.getElementById(id); };
   var yen = function (n) { return '¥' + (Math.round(Number(n) || 0)).toLocaleString('ja-JP'); };
+  // 明細行用。マイナス（値引き・不明分の超過）を「−¥1,270」の形で出す
+  var yenSigned = function (n) {
+    var v = Math.round(Number(n) || 0);
+    return (v < 0 ? '−' : '') + '¥' + Math.abs(v).toLocaleString('ja-JP');
+  };
 
   function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
   function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
@@ -322,19 +327,23 @@
       + '</div>'
       + reviewDetailHtml(t);
 
+    // 明細は「消費税」「不明分」を含めて総額とぴったり合うようサーバ側で組んである
     var items = t.items || [];
     var body;
     if (items.length) {
       var rows = items.map(function (it) {
         var q = (it.qty != null && it.qty !== '') ? ' ×' + it.qty : '';
-        return '<li><span class="i-name">' + escapeHtml(it.name || '') + escapeHtml(q) + '</span>'
-          + '<span class="i-price">' + (it.price != null ? yen(it.price) : '—') + '</span></li>';
+        var cls = it.auto ? ' class="auto"' : '';
+        return '<li' + cls + '><span class="i-name">' + escapeHtml(it.name || '') + escapeHtml(q) + '</span>'
+          + '<span class="i-price">' + (it.price != null ? yenSigned(it.price) : '—') + '</span></li>';
       }).join('');
       var sum = items.reduce(function (a, it) { return a + (Number(it.price) || 0); }, 0);
+      var matched = (sum === Math.round(Number(t.total) || 0));
       body = '<ul class="item-list">' + rows + '</ul>'
-        + '<div class="item-sum muted small">明細合計 ' + yen(sum)
-        + (t.tax ? '　＋税 ' + yen(t.tax) : '')
-        + '　/　総額 ' + yen(t.total) + '</div>';
+        + '<div class="item-sum' + (matched ? ' matched' : ' unmatched') + '">'
+        + '<span>明細合計</span>'
+        + '<span>' + yen(sum) + (matched ? '　＝ 総額' : '　/　総額 ' + yen(t.total)) + '</span>'
+        + '</div>';
     } else {
       body = '<p class="muted small">品目明細なし（総額のみ）</p>';
     }
@@ -567,7 +576,8 @@
       return '<option' + (c === t.category ? ' selected' : '') + '>' + escapeHtml(c) + '</option>';
     }).join('');
     var itemsHtml = (t.items && t.items.length)
-      ? '<div class="fld-note muted small">明細: ' + t.items.map(function (i) { return escapeHtml(i.name || '') + ' ' + yen(i.price || 0); }).join(' / ') + '</div>'
+      ? '<div class="fld-note muted small">明細: ' + t.items.map(function (i) { return escapeHtml(i.name || '') + ' ' + yenSigned(i.price || 0); }).join(' / ')
+        + '<br>（金額を直すと「不明分」が自動で計算し直され、明細合計は常に総額と一致します）</div>'
       : '';
     var fxHtml = (t.original_currency && t.original_currency !== 'JPY')
       ? '<div class="fld-note muted small">元通貨 ' + escapeHtml(t.original_currency) + ' ' + t.original_total + '（レート ' + t.fx_rate + ' で換算）</div>'
