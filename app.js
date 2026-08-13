@@ -1,60 +1,52 @@
-/* app.js — モバイルアプリのロジック
- * ・撮るビュー: レシート撮影/選択 → アップロード → 即時OCR結果を直近3件タブ表示
- * ・家計簿ビュー: GAS から集計を取得してダッシュボード表示（月切替対応）
- *   当月 = action=dashboard（AI分析つき・アップロード毎に更新）
- *   過去月 = action=overview&month=YYYY-MM（ライブ集計・分析なし）
+/* app.js — 写真で家計簿（スマホ版）
  *
- * 【2026-08 改訂】
- *   ・要確認に「何が懸案か」を表す理由（明細不足 −5,786円 など）を必ず表示する
- *   ・取引をタップして修正・削除できる編集モーダルを追加（スマホだけで完結させる）
+ * 3タブ構成:
+ *   １．撮る … 撮影とアップロードに特化。結果は 可否＋店名＋金額 だけ。要確認は「直す」へ誘導
+ *   ２．直す … 要確認の修正（月をまたいで全件）と直近の読み取り。明細は手入力で編集できる
+ *   ３．見る … 集計と分類のみ。要確認の個別リストは出さない（件数はタブのバッジ）
+ *
+ * 明細の帳尻はサーバ側（Ocr.gs / reconcileItems_）が持つ。
+ * 画面から送るのは実明細だけで、「消費税」「不明分」の行はサーバが作り直す。
  */
 (function () {
   'use strict';
 
   var CFG = window.KAKEIBO_CONFIG || {};
   var GAS_URL = CFG.GAS_URL || '';
-  var WEB_URL = CFG.WEB_URL || '';
   var TOKEN_KEY = 'kakeibo_token';
-  var pendingFiles = [];
-  var recentData = [];   // 直近3件のレシート（撮るビュー）
-  var activeTab = 0;
-
-  var selMonth = currentMonth();   // 家計簿ビューで表示中の月
-  var activeView = 'captureView';
-  var dashLoaded = false;
 
   var DAILY_CATS = ['ライフライン', '食費', '日用品', '衣料・服飾', '外食', '交通', '医療・健康', '行政手数料', '雑費'];
   var EXTRA_CATS = ['家電', '家具・インテリア', '調理・食器', '生活用品（大型）', '自転車・乗り物', '旅行・レジャー', '車関連', '住宅・修繕', '冠婚葬祭', '医療・税金・保険（高額/年払い）', 'その他臨時'];
+  var ALL_CATS = DAILY_CATS.concat(EXTRA_CATS);
 
-  // カテゴリ色（安定した割り当て。未知カテゴリはパレットを循環）
-  var CAT_COLORS = {
-    '食費': '#1f7a5a', '日用品': '#3f9b78', '外食': '#b5651d', '交通': '#5b8bb0',
-    '医療・健康': '#c0654f', 'ライフライン': '#7a6cc4', '行政手数料': '#8a8f8c', '雑費': '#8a8f8c'
-  };
-  var PALETTE = ['#1f7a5a', '#b5651d', '#5b8bb0', '#c0654f', '#7a6cc4', '#3f9b78', '#8a8f8c', '#c99a2e'];
-  function catColor(name, i) { return CAT_COLORS[name] || PALETTE[i % PALETTE.length]; }
+  var pendingFiles = [];
+  var activeView = 'captureView';
+  var fixSeg = 'review';
+  var reviewData = [];
+  var recentData = [];
+  var selMonth = currentMonth();
+  var loaded = { fix: false, see: false };
 
   var el = function (id) { return document.getElementById(id); };
   var yen = function (n) { return '¥' + (Math.round(Number(n) || 0)).toLocaleString('ja-JP'); };
-  // 明細行用。マイナス（値引き・不明分の超過）を「−¥1,270」の形で出す
+  /** 明細行用。マイナス（値引き・不明分の超過）を「−¥1,270」の形で出す */
   var yenSigned = function (n) {
     var v = Math.round(Number(n) || 0);
     return (v < 0 ? '−' : '') + '¥' + Math.abs(v).toLocaleString('ja-JP');
   };
-
-  function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
-  function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
 
   function currentMonth() {
-    var d = new Date();
-    var m = d.getMonth() + 1;
+    var d = new Date(), m = d.getMonth() + 1;
     return d.getFullYear() + '-' + (m < 10 ? '0' + m : m);
   }
   function addMonth(ym, delta) {
-    var p = ym.split('-'); var y = +p[0], m = +p[1] - 1 + delta;
-    var d = new Date(y, m, 1);
-    var mm = d.getMonth() + 1;
-    return d.getFullYear() + '-' + (mm < 10 ? '0' + mm : mm);
+    var p = ym.split('-'), d = new Date(+p[0], +p[1] - 1 + delta, 1), m = d.getMonth() + 1;
+    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m);
   }
   function monthJa(ym) {
     var p = (ym || '').split('-');
@@ -64,13 +56,11 @@
     if (!iso) return '';
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '';
-    var m = d.getMonth() + 1, day = d.getDate();
     var hh = ('0' + d.getHours()).slice(-2), mi = ('0' + d.getMinutes()).slice(-2);
-    return '更新 ' + m + '/' + day + ' ' + hh + ':' + mi;
+    return '更新 ' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hh + ':' + mi;
   }
 
   // ===== 要確認の理由表示 =====
-  // 旧データ（理由フィールドがない取引）でも壊れないよう、なければ既定文言にフォールバック。
   function reviewText(t) {
     if (!t || t.status !== '要確認') return '';
     if (t.review_summary) return t.review_summary;
@@ -81,16 +71,14 @@
     }
     return '内容を確認してください';
   }
-  /** 理由＋「何を確認すればよいか」の手引きを1行ずつ */
-  function reviewDetailHtml(t) {
+  function reviewNoteHtml(t) {
     if (!t || t.status !== '要確認') return '';
     var rs = t.review_reasons || [];
     if (!rs.length) return '<div class="review-note"><b>要確認</b>　' + escapeHtml(reviewText(t)) + '</div>';
-    var lines = rs.map(function (r) {
+    return '<div class="review-note"><ul>' + rs.map(function (r) {
       var head = escapeHtml((r.label || r.code || '') + (r.detail ? ' ' + r.detail : ''));
-      return '<li><b>' + head + '</b>' + (r.hint ? '<span class="rv-hint">' + escapeHtml(r.hint) + '</span>' : '') + '</li>';
-    }).join('');
-    return '<div class="review-note"><ul class="rv-list">' + lines + '</ul></div>';
+      return '<li><b>' + head + '</b>' + (r.hint ? '<span class="hint-line">' + escapeHtml(r.hint) + '</span>' : '') + '</li>';
+    }).join('') + '</ul></div>';
   }
 
   // ===== API =====
@@ -108,6 +96,7 @@
       body: JSON.stringify(payload)
     }).then(function (r) { return r.json(); });
   }
+  function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 
   // ===== 合言葉 =====
   function ensureAuth() {
@@ -117,47 +106,43 @@
     return false;
   }
   function showChrome(on) {
-    // 認証前はタブナビと各ビューを隠す
     el('bottomNav').classList.toggle('hidden', !on);
-    el('captureView').classList.toggle('hidden', !on || activeView !== 'captureView');
-    el('dashboardView').classList.toggle('hidden', !on || activeView !== 'dashboardView');
+    ['captureView', 'fixView', 'seeView'].forEach(function (v) {
+      el(v).classList.toggle('hidden', !on || activeView !== v);
+    });
   }
-
   el('saveTokenBtn').addEventListener('click', function () {
     var t = el('tokenInput').value.trim();
     if (!t) { el('authError').textContent = '合言葉を入力してください'; return; }
-    setToken(t);
+    localStorage.setItem(TOKEN_KEY, t);
     apiGet('ping').then(function (res) {
-      if (res && res.ok) { el('authView').classList.add('hidden'); showChrome(true); loadRecent(); }
+      if (res && res.ok) { el('authView').classList.add('hidden'); showChrome(true); refreshBadge(); }
       else { localStorage.removeItem(TOKEN_KEY); el('authError').textContent = '合言葉が違うようです'; }
-    }).catch(function () {
-      el('authError').textContent = '接続できません。URL設定を確認してください';
-    });
+    }).catch(function () { el('authError').textContent = '接続できません。URL設定を確認してください'; });
   });
 
-  // ===== ビュー切替（下部タブ） =====
+  // ===== タブ =====
   Array.prototype.forEach.call(document.querySelectorAll('.nav-tab'), function (btn) {
-    btn.addEventListener('click', function () {
-      var target = btn.getAttribute('data-target');
-      switchView(target);
-    });
+    btn.addEventListener('click', function () { switchView(btn.getAttribute('data-target')); });
   });
   function switchView(target) {
     activeView = target;
     Array.prototype.forEach.call(document.querySelectorAll('.nav-tab'), function (b) {
       b.classList.toggle('active', b.getAttribute('data-target') === target);
     });
-    el('captureView').classList.toggle('hidden', target !== 'captureView');
-    el('dashboardView').classList.toggle('hidden', target !== 'dashboardView');
+    ['captureView', 'fixView', 'seeView'].forEach(function (v) { el(v).classList.toggle('hidden', v !== target); });
+    el('appTitle').textContent = target === 'fixView' ? '直す' : (target === 'seeView' ? '見る' : '写真で家計簿');
     window.scrollTo(0, 0);
-    if (target === 'dashboardView' && !dashLoaded) { dashLoaded = true; loadDashboard(); }
+    if (target === 'fixView' && !loaded.fix) loadFix();
+    if (target === 'seeView' && !loaded.see) loadSee();
   }
 
-  // ===== ファイル選択・プレビュー（撮影 / ギャラリー選択の両対応） =====
+  // ===================================================================
+  // １．撮る
+  // ===================================================================
   function onPick(e) {
-    var files = Array.prototype.slice.call(e.target.files || []);
-    files.forEach(function (f) { pendingFiles.push(f); });
-    e.target.value = ''; // 同じファイルを続けて選べるようにリセット
+    Array.prototype.slice.call(e.target.files || []).forEach(function (f) { pendingFiles.push(f); });
+    e.target.value = '';
     renderPreviews();
   }
   el('cameraInput').addEventListener('change', onPick);
@@ -174,80 +159,70 @@
     el('uploadBtn').disabled = pendingFiles.length === 0;
   }
 
-  // ===== アップロード（都度OCR・読み取り状況を即表示） =====
   el('uploadBtn').addEventListener('click', function () {
     if (!pendingFiles.length) return;
     el('uploadBtn').disabled = true;
-    var status = el('uploadStatus');
-    status.className = 'status';
-    var total = pendingFiles.length;
+    el('shotSummary').classList.add('hidden');
 
-    el('recentTabs').innerHTML = '';
-    var panel = el('recentPanel');
-    panel.innerHTML = '';
-    var progress = document.createElement('ul');
-    progress.className = 'progress-list';
-    panel.appendChild(progress);
-
+    var list = el('shotList');
+    list.innerHTML = '';
     var rows = pendingFiles.map(function (f) {
       var li = document.createElement('li');
-      li.innerHTML = '<span class="p-name">' + escapeHtml(f.name || 'レシート') + '</span>'
-        + '<span class="p-state"><span class="spinner"></span>読み取り中…</span>';
-      progress.appendChild(li);
+      li.innerHTML = '<div class="spinner-line"><span class="spinner"></span>読み取り中… ' + escapeHtml(f.name || 'レシート') + '</div>';
+      list.appendChild(li);
       return li;
     });
 
     var queue = pendingFiles.map(function (f, i) { return { file: f, row: rows[i] }; });
-    var done = 0, errors = 0, review = 0, dup = 0, idx = 0;
+    var done = 0, errors = 0, review = 0, dup = 0;
 
-    function setRow(row, cls, text, sub) {
-      row.querySelector('.p-state').innerHTML = '<span class="dot ' + cls + '"></span>' + escapeHtml(text);
-      if (sub) {
-        var n = document.createElement('div');
-        n.className = 'p-review';
-        n.textContent = sub;
-        row.appendChild(n);
+    function paint(row, mark, name, amount, why) {
+      var html = '<div class="line"><span class="mark">' + mark + '</span>'
+        + '<span class="name">' + escapeHtml(name) + '</span>'
+        + (amount != null ? '<span class="amt">' + yen(amount) + '</span>' : '') + '</div>';
+      if (why) {
+        html += '<div class="why">' + escapeHtml(why) + '</div>'
+          + '<div class="go"><button class="ghost mini" data-go-fix="1">直すで確認 ›</button></div>';
       }
+      row.innerHTML = html;
+      var b = row.querySelector('[data-go-fix]');
+      if (b) b.addEventListener('click', function () { switchView('fixView'); loadFix(); });
     }
 
     function finish() {
-      var parts = [done + '件取り込み'];
-      if (review) parts.push('要確認' + review + '件');
-      if (dup) parts.push('重複' + dup + '件');
-      if (errors) parts.push('失敗' + errors + '件');
-      status.className = 'status ' + (errors ? 'err' : 'ok');
-      status.textContent = parts.join(' / ');
+      var parts = [];
+      parts.push('<span class="ok">' + done + '件 取り込み</span>');
+      if (review) parts.push('<span class="ng">要確認 ' + review + '件</span>');
+      if (dup) parts.push('<span class="ng">重複 ' + dup + '件</span>');
+      if (errors) parts.push('<span class="err">失敗 ' + errors + '件</span>');
+      var s = el('shotSummary');
+      s.innerHTML = parts.join('');
+      s.classList.remove('hidden');
       pendingFiles = [];
       renderPreviews();
-      loadRecent();          // 撮るビューの直近3件を更新
-      dashLoaded = false;    // 家計簿を次に開くとき再取得（集計が変わっているため）
+      loaded.fix = false; loaded.see = false;   // 次に開くとき取り直す
+      refreshBadge();
     }
 
     function step() {
       if (!queue.length) { finish(); return; }
       var item = queue.shift();
-      idx++;
-      status.textContent = '読み取り中… ' + idx + '/' + total;
       toBase64(item.file).then(function (b64) {
         return apiPost({ action: 'upload', filename: item.file.name, mimeType: item.file.type || 'image/jpeg', dataBase64: b64 });
       }).then(function (res) {
         if (res && res.ok) {
-          done++;
           var t = res.transaction || {};
-          if (res.duplicate) { dup++; setRow(item.row, 'review', '重複（取込済み）'); }
-          else if (t.status === '要確認') {
-            review++;
-            setRow(item.row, 'review', (t.store || '(店名不明)') + ' ' + yen(t.total), '要確認: ' + reviewText(t));
-          }
-          else { setRow(item.row, 'ok', (t.store || '(店名不明)') + ' ' + yen(t.total)); }
+          if (res.duplicate) { dup++; paint(item.row, '⚠️', (t.store || 'レシート') + '（取込済み）', t.total, '同じレシートが既にあります'); }
+          else if (t.status === '要確認') { done++; review++; paint(item.row, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
+          else { done++; paint(item.row, '✅', t.store || '(店名不明)', t.total, ''); }
         } else {
           errors++;
-          setRow(item.row, 'err', '失敗: ' + ((res && res.error) || '読み取れませんでした'));
+          paint(item.row, '⛔', '読み取れませんでした', null, (res && res.error) || '');
         }
         step();
       }).catch(function () {
         errors++;
-        setRow(item.row, 'err', '通信エラー');
+        paint(item.row, '⛔', '通信エラー', null, '');
         step();
       });
     }
@@ -258,8 +233,7 @@
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
       reader.onload = function () {
-        var s = reader.result;
-        var comma = s.indexOf(',');
+        var s = reader.result, comma = s.indexOf(',');
         resolve(comma >= 0 ? s.substring(comma + 1) : s);
       };
       reader.onerror = reject;
@@ -267,413 +241,481 @@
     });
   }
 
-  // ===== 直近3レシートのタブ表示（撮るビュー） =====
-  function loadRecent() {
-    var panel = el('recentPanel');
-    apiGet('transactions', { month: currentMonth() }).then(function (res) {
-      if (!res || res.error) { el('recentTabs').innerHTML = ''; panel.innerHTML = '<p class="muted">取得できませんでした</p>'; return; }
-      var list = (res.transactions || []).slice().sort(function (a, b) {
-        return (b.scanned_at || '').localeCompare(a.scanned_at || '');
-      }).slice(0, 3);
-      recentData = list;
-      activeTab = 0;
-      renderTabs();
-    }).catch(function () {
-      el('recentTabs').innerHTML = '';
-      panel.innerHTML = '<p class="muted">接続エラー</p>';
-    });
+  // ===================================================================
+  // ２．直す
+  // ===================================================================
+  Array.prototype.forEach.call(document.querySelectorAll('.seg button'), function (b) {
+    b.addEventListener('click', function () { setSeg(b.getAttribute('data-seg')); });
+  });
+  function setSeg(seg) {
+    fixSeg = seg;
+    el('segReview').classList.toggle('on', seg === 'review');
+    el('segRecent').classList.toggle('on', seg === 'recent');
+    el('reviewCard').classList.toggle('hidden', seg !== 'review');
+    el('recentCard').classList.toggle('hidden', seg !== 'recent');
   }
 
-  function renderTabs() {
-    var tabs = el('recentTabs');
-    var panel = el('recentPanel');
-    tabs.innerHTML = '';
-    if (!recentData.length) {
-      panel.innerHTML = '<p class="muted">まだレシートがありません。写真をアップロードすると、ここに読み取り結果が出ます。</p>';
+  function loadFix() {
+    loaded.fix = true;
+    el('reviewList').innerHTML = '<li class="muted small">読み込み中…</li>';
+    el('recentList').innerHTML = '<li class="muted small">読み込み中…</li>';
+
+    apiGet('reviews').then(function (res) {
+      reviewData = (res && res.transactions) || [];
+      renderReviewList();
+      setBadge(reviewData.length);
+    }).catch(function () { el('reviewList').innerHTML = '<li class="muted small">接続エラー</li>'; });
+
+    apiGet('transactions', { month: currentMonth() }).then(function (res) {
+      var list = ((res && res.transactions) || []).slice().sort(function (a, b) {
+        return String(b.scanned_at || '').localeCompare(String(a.scanned_at || ''));
+      }).slice(0, 10);
+      recentData = list.map(function (t) { t.month = res.month; return t; });
+      renderRecentList();
+    }).catch(function () { el('recentList').innerHTML = '<li class="muted small">接続エラー</li>'; });
+  }
+
+  function renderReviewList() {
+    el('reviewCount').textContent = reviewData.length ? reviewData.length + '件' : '';
+    var ul = el('reviewList');
+    ul.innerHTML = '';
+    if (!reviewData.length) {
+      ul.innerHTML = '<li class="muted small">要確認はありません。</li>';
       return;
     }
+    reviewData.forEach(function (t, i) {
+      ul.appendChild(txRow(t, reviewText(t), 'review', i));
+    });
+  }
+  function renderRecentList() {
+    var ul = el('recentList');
+    ul.innerHTML = '';
+    if (!recentData.length) { ul.innerHTML = '<li class="muted small">まだ取引がありません。</li>'; return; }
     recentData.forEach(function (t, i) {
-      var b = document.createElement('button');
-      b.className = 'tab' + (i === activeTab ? ' active' : '');
-      var label = (t.store || '(店名不明)');
-      if (label.length > 8) label = label.substring(0, 8) + '…';
-      b.innerHTML = escapeHtml(label) + (t.status === '要確認' ? ' <span class="tab-flag">要確認</span>' : '');
-      b.addEventListener('click', function () { activeTab = i; renderTabs(); });
-      tabs.appendChild(b);
-    });
-    panel.innerHTML = receiptDetailHtml(recentData[activeTab])
-      + '<button class="edit-btn" id="recentEditBtn">この取引を修正</button>';
-    var eb = el('recentEditBtn');
-    if (eb) eb.addEventListener('click', function () {
-      openTxEditor(recentData[activeTab], currentMonth(), loadRecent);
+      ul.appendChild(txRow(t, '', 'recent', i));
     });
   }
-
-  function receiptDetailHtml(t) {
-    if (!t) return '';
-    var statusTag = t.status === '要確認'
+  function txRow(t, why, src, idx) {
+    var li = document.createElement('li');
+    var tag = t.status === '要確認'
       ? '<span class="tag review">要確認</span>'
-      : '<span class="tag ' + (t.expense_type === '臨時' ? 'extra' : 'daily') + '">' + escapeHtml(t.expense_type || '確定') + '</span>';
-    var head = ''
-      + '<div class="rc-head">'
-      + '  <div class="rc-store">' + escapeHtml(t.store || '(店名不明)') + statusTag + '</div>'
-      + '  <div class="rc-total">' + yen(t.total) + '</div>'
+      : '<span class="tag ok">' + escapeHtml(t.expense_type || '確定') + '</span>';
+    li.innerHTML = '<div class="main">'
+      + '<div class="store">' + escapeHtml(t.store || '(店名不明)') + (src === 'recent' ? tag : '') + '</div>'
+      + (why ? '<div class="why">' + escapeHtml(why) + '</div>' : '')
+      + '<div class="sub">' + escapeHtml((t.purchase_date || '日付不明').replace(/^\d{4}-/, '')) + '　' + escapeHtml(t.category || '') + '</div>'
       + '</div>'
-      + '<div class="rc-meta muted small">'
-      + escapeHtml(t.purchase_date || '日付不明')
-      + (t.purchase_time ? ' ' + escapeHtml(t.purchase_time) : '')
-      + '　/　' + escapeHtml(t.category || '')
-      + (t.confidence != null ? '　/　確度 ' + Math.round(t.confidence * 100) + '%' : '')
-      + '</div>'
-      + reviewDetailHtml(t);
-
-    // 明細は「消費税」「不明分」を含めて総額とぴったり合うようサーバ側で組んである
-    var items = t.items || [];
-    var body;
-    if (items.length) {
-      var rows = items.map(function (it) {
-        var q = (it.qty != null && it.qty !== '') ? ' ×' + it.qty : '';
-        var cls = it.auto ? ' class="auto"' : '';
-        return '<li' + cls + '><span class="i-name">' + escapeHtml(it.name || '') + escapeHtml(q) + '</span>'
-          + '<span class="i-price">' + (it.price != null ? yenSigned(it.price) : '—') + '</span></li>';
-      }).join('');
-      var sum = items.reduce(function (a, it) { return a + (Number(it.price) || 0); }, 0);
-      var matched = (sum === Math.round(Number(t.total) || 0));
-      body = '<ul class="item-list">' + rows + '</ul>'
-        + '<div class="item-sum' + (matched ? ' matched' : ' unmatched') + '">'
-        + '<span>明細合計</span>'
-        + '<span>' + yen(sum) + (matched ? '　＝ 総額' : '　/　総額 ' + yen(t.total)) + '</span>'
-        + '</div>';
-    } else {
-      body = '<p class="muted small">品目明細なし（総額のみ）</p>';
-    }
-    return head + body;
+      + '<div class="amt">' + yen(t.total) + '</div><div class="chev">›</div>';
+    li.addEventListener('click', function () { openSheet(src, idx); });
+    return li;
   }
 
-  // ===== 家計簿ダッシュボード =====
-  el('monthPrev').addEventListener('click', function () { selMonth = addMonth(selMonth, -1); loadDashboard(); });
-  el('monthNext').addEventListener('click', function () {
-    if (selMonth >= currentMonth()) return;
-    selMonth = addMonth(selMonth, 1); loadDashboard();
+  // ===== 修正シート =====
+  var cur = null, curSrc = null, curIdx = -1;
+
+  function openSheet(src, idx) {
+    var t = (src === 'review' ? reviewData : recentData)[idx];
+    if (!t) return;
+    curSrc = src; curIdx = idx;
+    // 実明細だけを編集対象にする（消費税・不明分はサーバが作り直す）
+    cur = {
+      id: t.id, month: t.month || currentMonth(),
+      store: t.store || '', purchase_date: t.purchase_date || '',
+      total: (typeof t.total === 'number') ? t.total : 0,
+      tax: (typeof t.tax === 'number') ? t.tax : 0,
+      expense_type: t.expense_type === '臨時' ? '臨時' : '日常',
+      category: t.category || '雑費',
+      status: t.status || '確定',
+      note: reviewNoteHtml(t),
+      original_currency: t.original_currency, original_total: t.original_total, fx_rate: t.fx_rate,
+      items: (t.items || []).filter(function (i) { return !i.auto; })
+        .map(function (i) { return { name: i.name || '', price: Number(i.price) || 0 }; })
+    };
+    el('sheetBody').innerHTML = sheetHtml(cur);
+    bindSheet();
+    renderItems();
+    el('sheet').classList.remove('hidden');
+    el('sheetBg').classList.remove('hidden');
+    document.body.classList.add('sheet-open');
+  }
+  function closeSheet() {
+    el('sheet').classList.add('hidden');
+    el('sheetBg').classList.add('hidden');
+    document.body.classList.remove('sheet-open');
+    cur = null;
+  }
+  el('sheetCancel').addEventListener('click', closeSheet);
+  el('sheetBg').addEventListener('click', closeSheet);
+
+  function sheetHtml(t) {
+    var cats = ALL_CATS.map(function (c) {
+      return '<option' + (c === t.category ? ' selected' : '') + '>' + escapeHtml(c) + '</option>';
+    }).join('');
+    var fx = (t.original_currency && t.original_currency !== 'JPY')
+      ? '<p class="muted xsmall" style="margin:-4px 0 8px">元通貨 ' + escapeHtml(t.original_currency) + ' ' + t.original_total + '（レート ' + t.fx_rate + ' で換算）</p>' : '';
+    return t.note
+      + '<label class="fld">店名</label><input id="f_store" type="text" value="' + escapeHtml(t.store) + '">'
+      + '<div class="fld-row">'
+      + '  <div><label class="fld">日付</label><input id="f_date" type="date" value="' + escapeHtml(t.purchase_date) + '"></div>'
+      + '  <div><label class="fld">金額（円）</label><input id="f_total" type="number" inputmode="numeric" value="' + t.total + '"></div>'
+      + '</div>' + fx
+      + '<div class="fld-row">'
+      + '  <div><label class="fld">区分</label><select id="f_type"><option' + (t.expense_type === '日常' ? ' selected' : '') + '>日常</option><option' + (t.expense_type === '臨時' ? ' selected' : '') + '>臨時</option></select></div>'
+      + '  <div><label class="fld">状態</label><select id="f_status"><option' + (t.status === '確定' ? ' selected' : '') + '>確定</option><option' + (t.status === '要確認' ? ' selected' : '') + '>要確認</option></select></div>'
+      + '</div>'
+      + '<label class="fld">カテゴリ</label><select id="f_cat">' + cats + '</select>'
+      + '<label class="fld" style="margin-top:14px">品目明細</label>'
+      + '<div class="item-editor" id="itemEditor"></div>'
+      + '<div class="item-tally" id="itemTally"></div>'
+      + '<button class="add-item" id="addItemBtn">＋ 品目を追加</button>'
+      + '<button class="del-btn" id="delTxBtn">この取引を削除</button>';
+  }
+  function bindSheet() {
+    el('f_total').addEventListener('input', function () {
+      cur.total = Number(this.value) || 0;
+      renderItems();
+    });
+    el('addItemBtn').addEventListener('click', function () {
+      cur.items.push({ name: '', price: 0 });
+      renderItems();
+      var ns = document.querySelectorAll('#itemEditor .item-row:not(.auto) input.i-name');
+      if (ns.length) ns[ns.length - 1].focus();
+    });
+    el('delTxBtn').addEventListener('click', function () {
+      if (!confirm('この取引を削除しますか？元に戻せません。')) return;
+      apiPost({ action: 'delete_txn', month: cur.month, id: cur.id }).then(function (res) {
+        if (res && res.ok) { closeSheet(); loaded.see = false; loadFix(); }
+        else alert('削除に失敗: ' + ((res && res.error) || ''));
+      }).catch(function () { alert('通信エラー'); });
+    });
+  }
+
+  /** 明細エディタ。実明細＋（税抜表記なら消費税）＋不明分 を常に総額に一致させて表示する */
+  function renderItems() {
+    var box = el('itemEditor');
+    var rows = cur.items.map(function (it, i) {
+      return '<div class="item-row">'
+        + '<input class="i-name" type="text" placeholder="品名" value="' + escapeHtml(it.name) + '" data-i="' + i + '" data-f="name">'
+        + '<input class="i-price" type="number" inputmode="numeric" value="' + it.price + '" data-i="' + i + '" data-f="price">'
+        + '<button class="i-del" data-del="' + i + '" aria-label="削除">🗑</button>'
+        + '</div>';
+    }).join('');
+
+    var sum = cur.items.reduce(function (a, x) { return a + (Number(x.price) || 0); }, 0);
+    var auto = '';
+    var tax = Number(cur.tax) || 0;
+    if (cur.items.length && tax > 0 && Math.abs(sum + tax - cur.total) < Math.abs(sum - cur.total)) {
+      auto += autoRow('消費税', tax); sum += tax;
+    }
+    var gap = cur.total - sum;
+    if (cur.items.length && gap !== 0) { auto += autoRow('不明分', gap); sum += gap; }
+
+    box.innerHTML = rows + auto;
+    Array.prototype.forEach.call(box.querySelectorAll('input[data-i]'), function (inp) {
+      inp.addEventListener('change', function () {
+        var i = +this.getAttribute('data-i'), f = this.getAttribute('data-f');
+        cur.items[i][f] = (f === 'price') ? (Number(this.value) || 0) : this.value;
+        renderItems();
+      });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-del]'), function (b) {
+      b.addEventListener('click', function () { cur.items.splice(+this.getAttribute('data-del'), 1); renderItems(); });
+    });
+
+    var tally = el('itemTally');
+    if (!cur.items.length) {
+      tally.className = 'item-tally';
+      tally.innerHTML = '<span class="muted small" style="font-weight:400">品目明細なし（総額のみ）</span><span></span>';
+    } else {
+      var ok = (sum === Math.round(cur.total));
+      tally.className = 'item-tally ' + (ok ? 'matched' : 'unmatched');
+      tally.innerHTML = '<span>明細合計</span><span>' + yen(sum) + (ok ? '　＝ 総額' : '　/　総額 ' + yen(cur.total)) + '</span>';
+    }
+  }
+  function autoRow(name, price) {
+    return '<div class="item-row auto">'
+      + '<input class="i-name" type="text" value="' + name + '" readonly>'
+      + '<input class="i-price" type="text" value="' + yenSigned(price).replace('¥', '') + '" readonly>'
+      + '<button class="i-del">🗑</button></div>';
+  }
+
+  el('sheetSave').addEventListener('click', function () {
+    if (!cur) return closeSheet();
+    var btn = el('sheetSave');
+    btn.disabled = true;
+    var fields = {
+      store: el('f_store').value,
+      purchase_date: el('f_date').value,
+      total: Number(el('f_total').value) || 0,
+      expense_type: el('f_type').value,
+      category: el('f_cat').value,
+      status: el('f_status').value,
+      items: cur.items.map(function (i) { return { name: i.name, price: Number(i.price) || 0, qty: null, category: '' }; })
+    };
+    apiPost({ action: 'correct', month: cur.month, id: cur.id, fields: fields }).then(function (res) {
+      btn.disabled = false;
+      if (!res || !res.ok) { alert('保存に失敗: ' + ((res && res.error) || '')); return; }
+      closeSheet();
+      loaded.see = false;
+      loadFix();
+    }).catch(function () { btn.disabled = false; alert('通信エラー'); });
   });
 
-  function normalizeDash(d) {
-    d = d || {};
-    return {
-      month: d.month || selMonth,
-      generated_at: d.generated_at || null,
-      totals: d.totals || { all: 0, daily: 0, extraordinary: 0 },
-      by_category: d.by_category || [],
-      daily_trend: d.daily_trend || [],
-      plan_vs_actual: d.plan_vs_actual || [],
-      needs_review_count: d.needs_review_count || 0,
-      needs_review_breakdown: d.needs_review_breakdown || [],
-      needs_review_transactions: d.needs_review_transactions || [],
-      recent_transactions: d.recent_transactions || [],
-      analysis: d.analysis || { generated_at: null, text: '' }
-    };
+  // ===== バッジ =====
+  function setBadge(n) {
+    var b = el('navBadge');
+    if (n > 0) { b.textContent = n; b.classList.remove('hidden'); }
+    else b.classList.add('hidden');
+  }
+  function refreshBadge() {
+    apiGet('reviews').then(function (res) {
+      reviewData = (res && res.transactions) || [];
+      setBadge(reviewData.length);
+      if (activeView === 'fixView') renderReviewList();
+    }).catch(function () {});
   }
 
-  function loadDashboard() {
+  // ===================================================================
+  // ３．見る
+  // ===================================================================
+  el('monthPrev').addEventListener('click', function () { selMonth = addMonth(selMonth, -1); loadSee(); });
+  el('monthNext').addEventListener('click', function () {
+    if (selMonth >= currentMonth()) return;
+    selMonth = addMonth(selMonth, 1); loadSee();
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.toggle'), function (b) {
+    b.addEventListener('click', function () {
+      var id = b.getAttribute('data-target');
+      var tbl = el(id), chart = tbl.previousElementSibling;
+      var showTable = tbl.classList.contains('hidden');
+      tbl.classList.toggle('hidden', !showTable);
+      if (chart) chart.classList.toggle('hidden', showTable);
+      b.textContent = showTable ? 'グラフで見る' : '表で見る';
+    });
+  });
+
+  function loadSee() {
+    loaded.see = true;
     el('monthText').textContent = monthJa(selMonth);
     el('monthNext').disabled = (selMonth >= currentMonth());
     el('monthGenerated').textContent = '読み込み中…';
-    setDashLoading();
 
     var isCurrent = (selMonth === currentMonth());
-    var req = isCurrent
-      ? apiGet('dashboard')
-      : apiGet('overview', { month: selMonth });
-
-    req.then(function (res) {
-      if (!res || res.error) { renderDashError((res && res.error) || '取得できませんでした'); return; }
-      renderDashboard(normalizeDash(res), isCurrent);
-    }).catch(function () {
-      renderDashError('接続エラー');
-    });
+    (isCurrent ? apiGet('dashboard') : apiGet('overview', { month: selMonth }))
+      .then(function (res) {
+        if (!res || res.error) { seeError((res && res.error) || '取得できませんでした'); return; }
+        // dashboard.json が古い月のものだったらライブ集計に切り替える
+        if (isCurrent && res.month !== selMonth) return apiGet('overview', { month: selMonth }).then(renderSee);
+        renderSee(res, isCurrent);
+      })
+      .catch(function () { seeError('接続エラー'); });
   }
-
-  function setDashLoading() {
-    el('catChart').innerHTML = '<p class="muted small">読み込み中…</p>';
-    el('trendChart').innerHTML = '<p class="muted small">読み込み中…</p>';
-    el('planChart').innerHTML = '<p class="muted small">読み込み中…</p>';
-    el('dashRecent').innerHTML = '<li class="muted">読み込み中…</li>';
-  }
-  function renderDashError(msg) {
+  function seeError(msg) {
     el('monthGenerated').textContent = '';
-    el('totAll').textContent = el('totDaily').textContent = el('totExtra').textContent = '¥0';
-    el('reviewBadge').classList.add('hidden');
-    el('reviewCard').classList.add('hidden');
-    el('catChart').innerHTML = '<p class="muted small">' + escapeHtml(msg) + '</p>';
-    el('trendChart').innerHTML = '';
-    el('planCard').classList.add('hidden');
-    el('analysisCard').classList.add('hidden');
-    el('dashRecent').innerHTML = '<li class="muted">' + escapeHtml(msg) + '</li>';
+    el('catC').innerHTML = '<p class="muted small">' + escapeHtml(msg) + '</p>';
+    el('dayC').innerHTML = ''; el('difC').innerHTML = '';
   }
 
-  function renderDashboard(d, isCurrent) {
-    // 見出し
+  function renderSee(d, isCurrent) {
+    d = d || {};
+    var totals = d.totals || { all: 0, daily: 0, extraordinary: 0 };
+    var prev = d.prev || null;
     el('monthGenerated').textContent = isCurrent ? fmtStamp(d.generated_at) : 'ライブ集計';
 
-    // 合計
-    el('totAll').textContent = yen(d.totals.all);
-    el('totDaily').textContent = yen(d.totals.daily);
-    el('totExtra').textContent = yen(d.totals.extraordinary);
+    el('totAll').textContent = yen(totals.all);
+    el('totDaily').textContent = yen(totals.daily);
+    el('totExtra').textContent = yen(totals.extraordinary);
+    setDelta('dltAll', totals.all, prev && prev.totals ? prev.totals.all : null);
+    setDelta('dltDaily', totals.daily, prev && prev.totals ? prev.totals.daily : null);
+    setDelta('dltExtra', totals.extraordinary, prev && prev.totals ? prev.totals.extraordinary : null);
+    el('prevNote').textContent = (prev && prev.totals)
+      ? '前月（' + monthJa(prev.month) + ' ' + yen(prev.totals.all) + '）との比較。'
+      : '前月のデータがないため比較なし。';
 
-    // 要確認（件数バッジ＋理由別内訳＋一覧）
-    renderReview(d);
-
-    renderCatChart(d.by_category);
-    renderTrend(d.daily_trend);
-    renderPlan(d.plan_vs_actual);
+    renderCategory(d.by_category || [], prev ? (prev.by_category || []) : []);
+    renderDaily(d.daily_trend || []);
+    renderDiff(d.by_category || [], prev ? (prev.by_category || []) : [], prev ? prev.month : null);
+    renderPlan(d.plan_vs_actual || []);
     renderAnalysis(isCurrent ? d.analysis : null);
-    renderDashRecent(d.recent_transactions);
   }
 
-  /** 要確認カード: 件数・理由別内訳・該当取引（タップで修正） */
-  function renderReview(d) {
-    var rb = el('reviewBadge');
-    var card = el('reviewCard');
-    if (!d.needs_review_count) {
-      rb.classList.add('hidden');
-      card.classList.add('hidden');
-      return;
-    }
-    var breakdown = d.needs_review_breakdown || [];
-    rb.textContent = '⚠️ 要確認 ' + d.needs_review_count + ' 件'
-      + (breakdown.length ? '（' + breakdown.map(function (b) { return b.label + b.count; }).join('・') + '）' : '');
-    rb.classList.remove('hidden');
-
-    var list = d.needs_review_transactions || [];
-    if (!list.length) { card.classList.add('hidden'); return; }
-    card.classList.remove('hidden');
-
-    el('reviewChips').innerHTML = breakdown.map(function (b) {
-      return '<span class="chip">' + escapeHtml(b.label) + ' ' + b.count + '</span>';
-    }).join('');
-
-    var ul = el('reviewList');
-    ul.innerHTML = '';
-    list.forEach(function (t) {
-      var li = document.createElement('li');
-      li.innerHTML = '<div class="r-main">'
-        + '<div class="r-store">' + escapeHtml(t.store || '(店名不明)') + '</div>'
-        + '<div class="r-why">' + escapeHtml(reviewText(t)) + '</div>'
-        + '<div class="r-sub">' + escapeHtml(t.purchase_date || '日付不明') + '　' + escapeHtml(t.category || '') + '</div>'
-        + '</div><div class="r-amt">' + yen(t.total) + '</div>';
-      li.addEventListener('click', function () { openTxEditor(t, d.month, loadDashboard); });
-      ul.appendChild(li);
-    });
+  function setDelta(id, now, before) {
+    var e = el(id);
+    if (before == null) { e.textContent = ''; e.className = 'delta'; return; }
+    if (!before) { e.textContent = now ? '新規' : ''; e.className = 'delta up'; return; }
+    var r = (now - before) / before * 100;
+    var mark = r >= 0 ? '▲' : '▼';
+    e.textContent = mark + ' ' + Math.abs(r).toFixed(r >= 100 ? 0 : 1) + '%';
+    e.className = 'delta ' + (r >= 0 ? 'up' : 'down');
   }
 
-  function renderCatChart(cats) {
-    var box = el('catChart');
-    if (!cats.length) { box.innerHTML = '<p class="muted small">この月のデータはまだありません。</p>'; return; }
+  function prevAmount(list, cat) {
+    for (var i = 0; i < list.length; i++) if (list[i].category === cat) return list[i].amount;
+    return 0;
+  }
+
+  function renderCategory(cats, prevCats) {
+    var box = el('catC');
+    if (!cats.length) { box.innerHTML = '<p class="muted small">この月のデータはまだありません。</p>'; el('catT').innerHTML = ''; return; }
     var max = Math.max.apply(null, cats.map(function (c) { return Number(c.amount) || 0; })) || 1;
-    box.innerHTML = cats.map(function (c, i) {
-      var pct = Math.max(3, Math.round((Number(c.amount) || 0) / max * 100));
+    box.innerHTML = cats.map(function (c) {
+      var before = prevAmount(prevCats, c.category), diff = c.amount - before;
+      var lbl = !before ? '<span class="up xsmall">新規</span>'
+        : (diff > 0 ? '<span class="up xsmall">▲' + yen(diff) + '</span>'
+          : (diff < 0 ? '<span class="down xsmall">▼' + yen(-diff) + '</span>' : ''));
       return '<div class="bar-row">'
-        + '<div class="bar-head"><span class="bar-cat">' + escapeHtml(c.category || '未分類') + '</span>'
+        + '<div class="bar-head"><span class="bar-name">' + escapeHtml(c.category || '未分類') + ' ' + lbl + '</span>'
         + '<span class="bar-val">' + yen(c.amount) + '</span></div>'
-        + '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:' + catColor(c.category, i) + '"></div></div>'
+        + '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(2, (c.amount / max * 100)) + '%"></div></div>'
         + '</div>';
     }).join('');
+    el('catT').innerHTML = '<table class="tbl"><thead><tr><th>カテゴリ</th><th class="n">当月</th><th class="n">前月</th><th class="n">増減</th></tr></thead><tbody>'
+      + cats.map(function (c) {
+        var b = prevAmount(prevCats, c.category), df = c.amount - b;
+        return '<tr><td>' + escapeHtml(c.category) + '</td><td class="n">' + yen(c.amount) + '</td><td class="n">' + yen(b) + '</td><td class="n">' + (df >= 0 ? '+' : '−') + yen(Math.abs(df)).slice(1) + '</td></tr>';
+      }).join('') + '</tbody></table>';
   }
 
-  function renderTrend(trend) {
-    var box = el('trendChart');
-    if (!trend.length) { box.innerHTML = '<p class="muted small">この月のデータはまだありません。</p>'; return; }
+  function renderDaily(trend) {
+    var box = el('dayC');
+    if (!trend.length) { box.innerHTML = '<p class="muted small">この月のデータはまだありません。</p>'; el('dayT').innerHTML = ''; return; }
     var max = Math.max.apply(null, trend.map(function (t) { return Number(t.amount) || 0; })) || 1;
-    var bars = trend.map(function (t) {
-      var h = Math.max(2, Math.round((Number(t.amount) || 0) / max * 100));
-      var label = (t.date || '') + '　' + yen(t.amount);
-      return '<div class="tb" style="height:' + h + '%" title="' + escapeHtml(label) + '"></div>';
+    var cols = trend.map(function (t) {
+      var dy = Number(t.daily) || 0, ex = Number(t.extraordinary) || 0;
+      var day = (t.date || '').split('-')[2];
+      var h1 = dy / max * 100, h2 = ex / max * 100;
+      return '<div class="col">'
+        + '<div class="tip">' + (+day) + '日　日常 ' + yen(dy) + '／臨時 ' + yen(ex) + '</div>'
+        + (h2 > 0 ? '<div class="seg-e" style="height:' + h2 + '%"></div>' : '')
+        + '<div class="seg-d' + (h2 > 0 ? '' : ' top') + '" style="height:' + h1 + '%"></div>'
+        + '</div>';
     }).join('');
-    var first = trend[0].date ? (+trend[0].date.split('-')[2]) + '日' : '';
-    var last = trend[trend.length - 1].date ? (+trend[trend.length - 1].date.split('-')[2]) + '日' : '';
+    var first = (trend[0].date || '').split('-')[2], last = (trend[trend.length - 1].date || '').split('-')[2];
     var peak = trend.slice().sort(function (a, b) { return (b.amount || 0) - (a.amount || 0); })[0];
-    var peakStr = peak && peak.date ? ('最多: ' + (+peak.date.split('-')[2]) + '日 ' + yen(peak.amount)) : '';
-    box.innerHTML = '<div class="trend-bars">' + bars + '</div>'
-      + '<div class="trend-axis"><span>' + escapeHtml(first) + '</span><span>' + escapeHtml(last) + '</span></div>'
-      + (peakStr ? '<div class="trend-peak">' + escapeHtml(peakStr) + '</div>' : '');
+    box.innerHTML = '<div class="cols">' + cols + '</div>'
+      + '<div class="axis"><span>' + (+first) + '日</span><span>' + (+last) + '日</span></div>'
+      + (peak ? '<div class="peak">最多: ' + (+peak.date.split('-')[2]) + '日 ' + yen(peak.amount) + '</div>' : '');
+    // タップでもツールチップを出す
+    Array.prototype.forEach.call(box.querySelectorAll('.col'), function (c) {
+      c.addEventListener('click', function () {
+        var on = c.classList.contains('on');
+        Array.prototype.forEach.call(box.querySelectorAll('.col'), function (x) { x.classList.remove('on'); });
+        if (!on) c.classList.add('on');
+      });
+    });
+    el('dayT').innerHTML = '<table class="tbl"><thead><tr><th>日</th><th class="n">日常</th><th class="n">臨時</th><th class="n">計</th></tr></thead><tbody>'
+      + trend.map(function (t) {
+        return '<tr><td>' + (+(t.date || '').split('-')[2]) + '日</td><td class="n">' + yen(t.daily) + '</td><td class="n">' + yen(t.extraordinary) + '</td><td class="n">' + yen(t.amount) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function renderDiff(cats, prevCats, prevMonth) {
+    var box = el('difC');
+    el('difNote').textContent = prevMonth ? (monthJa(prevMonth) + '→' + monthJa(selMonth) + 'の増減。増えた項目が上。') : '';
+    if (!prevCats.length && !cats.length) { box.innerHTML = '<p class="muted small">比較できるデータがありません。</p>'; el('difT').innerHTML = ''; return; }
+    var names = {};
+    cats.forEach(function (c) { names[c.category] = true; });
+    prevCats.forEach(function (c) { names[c.category] = true; });
+    var diffs = Object.keys(names).map(function (n) {
+      return { category: n, diff: prevAmount(cats, n) - prevAmount(prevCats, n) };
+    }).filter(function (d) { return d.diff !== 0; }).sort(function (a, b) { return b.diff - a.diff; });
+    if (!diffs.length) { box.innerHTML = '<p class="muted small">前月との差はありません。</p>'; el('difT').innerHTML = ''; return; }
+    var max = Math.max.apply(null, diffs.map(function (d) { return Math.abs(d.diff); })) || 1;
+    box.innerHTML = '<ul class="diff-list">' + diffs.map(function (d) {
+      var w = Math.abs(d.diff) / max * 50;
+      var seg = d.diff > 0
+        ? '<span class="diff-seg" style="left:50%;width:' + w + '%;background:var(--data-2)"></span>'
+        : '<span class="diff-seg" style="right:50%;width:' + w + '%;background:var(--data)"></span>';
+      return '<li><span class="diff-name">' + escapeHtml(d.category) + '</span>'
+        + '<span class="diff-bar">' + seg + '</span>'
+        + '<span class="diff-val ' + (d.diff > 0 ? 'up' : 'down') + '">' + (d.diff > 0 ? '▲' : '▼') + ' ' + yen(Math.abs(d.diff)) + '</span></li>';
+    }).join('') + '</ul>';
+    el('difT').innerHTML = '<table class="tbl"><thead><tr><th>カテゴリ</th><th class="n">増減</th></tr></thead><tbody>'
+      + diffs.map(function (d) { return '<tr><td>' + escapeHtml(d.category) + '</td><td class="n">' + (d.diff >= 0 ? '+' : '−') + yen(Math.abs(d.diff)).slice(1) + '</td></tr>'; }).join('')
+      + '</tbody></table>';
   }
 
   function renderPlan(plans) {
-    var card = el('planCard');
     var box = el('planChart');
-    if (!plans.length) { card.classList.add('hidden'); return; }
-    card.classList.remove('hidden');
+    if (!plans.length) { box.innerHTML = '<p class="muted small" style="text-align:center;padding:10px 0">予定支出が登録されていません</p>'; return; }
     box.innerHTML = plans.map(function (p) {
-      var planned = Number(p.planned) || 0;
-      var actual = Number(p.actual) || 0;
+      var planned = Number(p.planned) || 0, actual = Number(p.actual) || 0;
       var ratio = planned > 0 ? actual / planned : (actual > 0 ? 1.5 : 0);
       var pct = Math.max(2, Math.min(100, Math.round(ratio * 100)));
       var over = planned > 0 && actual > planned;
-      var pctText = planned > 0 ? Math.round(ratio * 100) + '%' : '予算未設定';
       return '<div class="plan-row">'
         + '<div class="plan-head"><span class="plan-cat">' + escapeHtml(p.category || '') + '</span>'
         + '<span class="plan-num">実績 <b>' + yen(actual) + '</b> / 予定 ' + yen(planned) + '</span></div>'
         + '<div class="plan-track"><div class="plan-fill' + (over ? ' over' : '') + '" style="width:' + pct + '%"></div></div>'
-        + '<div class="plan-pct' + (over ? ' over' : '') + '">' + escapeHtml(pctText) + (over ? '（予算超過）' : '') + '</div>'
+        + '<div class="plan-pct' + (over ? ' over' : '') + '">' + (planned > 0 ? Math.round(ratio * 100) + '%' : '予算未設定') + (over ? '（予算超過）' : '') + '</div>'
         + '</div>';
     }).join('');
   }
 
   function renderAnalysis(analysis) {
-    var card = el('analysisCard');
-    if (!analysis || !analysis.text) { card.classList.add('hidden'); return; }
-    card.classList.remove('hidden');
-    el('analysisBody').textContent = analysis.text;
-    el('analysisMeta').textContent = fmtStamp(analysis.generated_at);
+    var body = el('analysisBody'), meta = el('analysisMeta');
+    if (analysis && analysis.text) {
+      body.textContent = analysis.text;
+      body.classList.remove('muted');
+      meta.textContent = fmtStamp(analysis.generated_at);
+    } else {
+      body.textContent = '「分析を実行」を押すと、その月の支出傾向をClaudeがまとめます。';
+      body.classList.add('muted');
+      meta.textContent = '';
+    }
   }
 
-  function renderDashRecent(list) {
-    var ul = el('dashRecent');
-    ul.innerHTML = '';
-    if (!list.length) { ul.innerHTML = '<li class="muted">まだ取引がありません。</li>'; return; }
-    list.slice(0, 10).forEach(function (t) {
-      var tag = t.status === '要確認'
-        ? '<span class="tag review">要確認</span>'
-        : '<span class="tag ' + (t.expense_type === '臨時' ? 'extra' : 'daily') + '">' + escapeHtml(t.expense_type || '') + '</span>';
-      var li = document.createElement('li');
-      li.innerHTML = '<div class="r-main"><div class="r-store">' + escapeHtml(t.store || '(店名不明)') + tag + '</div>'
-        + (t.status === '要確認' ? '<div class="r-why">' + escapeHtml(reviewText(t)) + '</div>' : '')
-        + '<div class="r-sub">' + escapeHtml(t.purchase_date || '') + '　' + escapeHtml(t.category || '') + '</div></div>'
-        + '<div class="r-amt">' + yen(t.total) + '</div>';
-      li.addEventListener('click', function () { openTxEditor(t, selMonth, loadDashboard); });
-      ul.appendChild(li);
-    });
-  }
-
-  // ===== 取引の修正モーダル（スマホで完結させるための追加） =====
-  var modalSave = null;
-  function showModal(title, bodyHtml, onSave) {
-    el('modalTitle').textContent = title;
-    el('modalBody').innerHTML = bodyHtml;
-    modalSave = onSave;
-    el('modal').classList.remove('hidden');
-    document.body.classList.add('modal-open');
-  }
-  function hideModal() {
-    el('modal').classList.add('hidden');
-    document.body.classList.remove('modal-open');
-    modalSave = null;
-  }
-  el('modalCancel').addEventListener('click', hideModal);
-  el('modalSave').addEventListener('click', function () {
-    if (!modalSave) return hideModal();
-    var btn = el('modalSave');
-    btn.disabled = true;
-    var p = modalSave();
-    if (p && p.then) p.then(function () { btn.disabled = false; hideModal(); })
-      .catch(function () { btn.disabled = false; alert('保存に失敗しました'); });
-    else { btn.disabled = false; hideModal(); }
+  el('analyzeBtn').addEventListener('click', function () {
+    var btn = el('analyzeBtn');
+    btn.disabled = true; btn.textContent = '分析中…';
+    apiPost({ action: 'analyze', month: selMonth }).then(function (res) {
+      btn.disabled = false; btn.textContent = '分析を実行';
+      if (res && res.text) renderAnalysis(res);
+      else alert('分析に失敗: ' + ((res && res.error) || ''));
+    }).catch(function () { btn.disabled = false; btn.textContent = '分析を実行'; alert('通信エラー'); });
   });
 
-  function openTxEditor(t, month, afterSave) {
-    if (!t || !t.id) return;
-    var cats = DAILY_CATS.concat(EXTRA_CATS).map(function (c) {
-      return '<option' + (c === t.category ? ' selected' : '') + '>' + escapeHtml(c) + '</option>';
-    }).join('');
-    var itemsHtml = (t.items && t.items.length)
-      ? '<div class="fld-note muted small">明細: ' + t.items.map(function (i) { return escapeHtml(i.name || '') + ' ' + yenSigned(i.price || 0); }).join(' / ')
-        + '<br>（金額を直すと「不明分」が自動で計算し直され、明細合計は常に総額と一致します）</div>'
-      : '';
-    var fxHtml = (t.original_currency && t.original_currency !== 'JPY')
-      ? '<div class="fld-note muted small">元通貨 ' + escapeHtml(t.original_currency) + ' ' + t.original_total + '（レート ' + t.fx_rate + ' で換算）</div>'
-      : '';
-
-    var body = reviewDetailHtml(t)
-      + '<label class="fld">店名</label><input id="m_store" type="text" value="' + escapeHtml(t.store || '') + '">'
-      + '<label class="fld">日付</label><input id="m_date" type="date" value="' + escapeHtml(t.purchase_date || '') + '">'
-      + '<label class="fld">金額（円）</label><input id="m_total" type="number" inputmode="numeric" value="' + (t.total != null ? t.total : '') + '">'
-      + fxHtml
-      + '<label class="fld">区分</label><select id="m_type"><option' + (t.expense_type === '日常' ? ' selected' : '') + '>日常</option><option' + (t.expense_type === '臨時' ? ' selected' : '') + '>臨時</option></select>'
-      + '<label class="fld">カテゴリ</label><select id="m_cat">' + cats + '</select>'
-      + '<label class="fld">状態</label><select id="m_status"><option' + (t.status === '確定' ? ' selected' : '') + '>確定</option><option' + (t.status === '要確認' ? ' selected' : '') + '>要確認</option></select>'
-      + itemsHtml
-      + '<button id="m_delete" class="del-btn">この取引を削除</button>';
-
-    showModal('取引の修正', body, function () {
-      var fields = {
-        store: el('m_store').value,
-        purchase_date: el('m_date').value,
-        total: Number(el('m_total').value) || 0,
-        expense_type: el('m_type').value,
-        category: el('m_cat').value,
-        status: el('m_status').value
-      };
-      return apiPost({ action: 'correct', month: month, id: t.id, fields: fields }).then(function (res) {
-        if (!res || !res.ok) { alert('保存に失敗: ' + ((res && res.error) || '')); return; }
-        dashLoaded = false;
-        if (afterSave) afterSave();
-      });
-    });
-
-    var del = el('m_delete');
-    if (del) del.addEventListener('click', function () {
-      if (!confirm('この取引を削除しますか？元に戻せません。')) return;
-      apiPost({ action: 'delete_txn', month: month, id: t.id }).then(function (res) {
-        if (res && res.ok) { hideModal(); dashLoaded = false; if (afterSave) afterSave(); }
-        else alert('削除に失敗: ' + ((res && res.error) || ''));
-      });
-    });
-  }
-
-  function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
-  // ===== 下スワイプで更新（pull-to-refresh） =====
+  // ===== 下スワイプで更新 =====
   (function setupPullToRefresh() {
-    var ptr = el('ptr');
-    var ptrText = el('ptrText');
-    var startY = 0, pulling = false, dist = 0;
-    var THRESHOLD = 70;
-
+    var ptr = el('ptr'), ptrText = el('ptrText');
+    var startY = 0, pulling = false, dist = 0, THRESHOLD = 70;
     document.addEventListener('touchstart', function (e) {
-      if (document.body.classList.contains('modal-open')) { pulling = false; return; }
-      if (window.scrollY <= 0 && e.touches.length === 1) {
-        startY = e.touches[0].clientY; pulling = true; dist = 0;
-      } else { pulling = false; }
+      if (document.body.classList.contains('sheet-open')) { pulling = false; return; }
+      if (window.scrollY <= 0 && e.touches.length === 1) { startY = e.touches[0].clientY; pulling = true; dist = 0; }
+      else pulling = false;
     }, { passive: true });
-
     document.addEventListener('touchmove', function (e) {
       if (!pulling) return;
       dist = e.touches[0].clientY - startY;
       if (dist > 0 && window.scrollY <= 0) {
-        var h = Math.min(dist, 90);
-        ptr.style.height = h + 'px';
+        ptr.style.height = Math.min(dist, 90) + 'px';
         ptr.classList.add('visible');
         ptrText.textContent = dist > THRESHOLD ? '離して更新' : '下に引いて更新';
       }
     }, { passive: true });
-
     document.addEventListener('touchend', function () {
       if (!pulling) return;
       pulling = false;
       if (dist > THRESHOLD) {
         ptrText.textContent = '更新中…';
         ptr.style.height = '36px';
-        if (activeView === 'dashboardView') loadDashboard(); else loadRecent();
-        setTimeout(resetPtr, 600);
-      } else {
-        resetPtr();
+        if (activeView === 'seeView') loadSee();
+        else if (activeView === 'fixView') loadFix();
+        else refreshBadge();
+        setTimeout(reset, 600);
+      } else reset();
+      function reset() {
+        ptr.classList.remove('visible');
+        ptr.style.height = '0px';
+        ptrText.textContent = '下に引いて更新';
       }
     });
-
-    function resetPtr() {
-      ptr.classList.remove('visible');
-      ptr.style.height = '0px';
-      ptrText.textContent = '下に引いて更新';
-    }
   })();
 
   // ===== 初期化 =====
   if (!GAS_URL || GAS_URL.indexOf('<<') === 0) {
-    el('uploadStatus').textContent = 'config.js に GAS_URL を設定してください';
+    el('shotList').innerHTML = '<li class="error">config.js に GAS_URL を設定してください</li>';
   }
-  if (ensureAuth()) loadRecent();
+  setSeg('review');
+  if (ensureAuth()) refreshBadge();
 })();
