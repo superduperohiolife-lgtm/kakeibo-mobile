@@ -20,12 +20,18 @@
   var ALL_CATS = DAILY_CATS.concat(EXTRA_CATS);
 
   var pendingFiles = [];
+  var thumbUrls = [];
+  var shotItems = [];          // 「読み取り結果」の各行（取引idを持たせて直すタブと同期する）
+  var CONCURRENCY = 2;         // まとめ撮りの同時読み取り枚数（サーバ側は書き込みをロックで直列化）
+  var SEC_PER_PHOTO = 14;      // 残り時間の目安表示に使う概算（実測ベースの目安）
+  var FIX_KEY = 'kakeibo_fix_v1';
   var activeView = 'captureView';
   var fixSeg = 'review';
   var reviewData = [];
   var recentData = [];
   var selMonth = currentMonth();
   var loaded = { fix: false, see: false };
+  var fixPainted = false;   // 一度でも「直す」の一覧を描いたか
 
   var el = function (id) { return document.getElementById(id); };
   var yen = function (n) { return '¥' + (Math.round(Number(n) || 0)).toLocaleString('ja-JP'); };
@@ -133,8 +139,9 @@
     ['captureView', 'fixView', 'seeView'].forEach(function (v) { el(v).classList.toggle('hidden', v !== target); });
     el('appTitle').textContent = target === 'fixView' ? '直す' : (target === 'seeView' ? '見る' : '写真で家計簿');
     window.scrollTo(0, 0);
-    if (target === 'fixView' && !loaded.fix) loadFix();
+    if (target === 'fixView') { if (!loaded.fix) loadFix(); else syncFix({ silent: true }); }
     if (target === 'seeView' && !loaded.see) loadSee();
+    if (target === 'captureView') syncShotMarks();
   }
 
   // ===================================================================
@@ -148,46 +155,109 @@
   el('cameraInput').addEventListener('change', onPick);
   el('fileInput').addEventListener('change', onPick);
 
+  /** サムネ。タップで拡大、×で1枚だけ外せる（どこまで撮ったかその場で直せるように） */
   function renderPreviews() {
     var box = el('previewList');
     box.innerHTML = '';
-    pendingFiles.forEach(function (f) {
-      var img = document.createElement('img');
-      img.src = URL.createObjectURL(f);
-      box.appendChild(img);
+    thumbUrls.forEach(function (u) { URL.revokeObjectURL(u); });
+    thumbUrls = [];
+    pendingFiles.forEach(function (f, i) {
+      var url = URL.createObjectURL(f);
+      thumbUrls.push(url);
+      var w = document.createElement('div');
+      w.className = 'thumb';
+      w.innerHTML = '<img src="' + url + '" alt="レシート' + (i + 1) + '">'
+        + '<span class="thumb-no">' + (i + 1) + '</span>'
+        + '<button class="thumb-del" aria-label="' + (i + 1) + '枚目を外す">×</button>';
+      w.querySelector('img').addEventListener('click', function () { openLightbox(i); });
+      w.querySelector('.thumb-del').addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        pendingFiles.splice(i, 1);
+        renderPreviews();
+      });
+      box.appendChild(w);
     });
     el('uploadBtn').disabled = pendingFiles.length === 0;
+    el('pickCount').textContent = pendingFiles.length
+      ? pendingFiles.length + '枚 選んでいます（タップで拡大、×で外す）' : '';
   }
+
+  // ===== 写真の拡大表示 =====
+  var lbIdx = -1;
+  function openLightbox(i) {
+    if (!pendingFiles[i]) return;
+    lbIdx = i;
+    paintLightbox();
+    el('lightbox').classList.remove('hidden');
+  }
+  function paintLightbox() {
+    el('lbImg').src = thumbUrls[lbIdx] || '';
+    el('lbLabel').textContent = (lbIdx + 1) + ' / ' + pendingFiles.length + '枚';
+    el('lbPrev').disabled = (lbIdx <= 0);
+    el('lbNext').disabled = (lbIdx >= pendingFiles.length - 1);
+  }
+  function closeLightbox() { el('lightbox').classList.add('hidden'); lbIdx = -1; }
+  el('lbClose').addEventListener('click', closeLightbox);
+  el('lbPrev').addEventListener('click', function () { if (lbIdx > 0) { lbIdx--; paintLightbox(); } });
+  el('lbNext').addEventListener('click', function () { if (lbIdx < pendingFiles.length - 1) { lbIdx++; paintLightbox(); } });
+  el('lbDel').addEventListener('click', function () {
+    if (lbIdx < 0) return;
+    var at = lbIdx;
+    pendingFiles.splice(at, 1);
+    renderPreviews();
+    if (!pendingFiles.length) { closeLightbox(); return; }
+    lbIdx = Math.min(at, pendingFiles.length - 1);
+    paintLightbox();
+  });
+
+  // ===== 読み取り中の表示・画面スリープ防止 =====
+  var wakeLock = null;
+  function keepAwake(on) {
+    try {
+      if (on && navigator.wakeLock && !wakeLock) {
+        navigator.wakeLock.request('screen').then(function (l) { wakeLock = l; }).catch(function () {});
+      } else if (!on && wakeLock) {
+        wakeLock.release(); wakeLock = null;
+      }
+    } catch (e) { /* 非対応端末では何もしない */ }
+  }
+  function showBusy(total) {
+    el('busyTotal').textContent = total;
+    el('busyDone').textContent = '0';
+    el('busyFill').style.width = '0%';
+    el('busyEta').textContent = 'およそ' + Math.max(1, Math.round(total * SEC_PER_PHOTO / CONCURRENCY / 60)) + '分';
+    el('busy').classList.remove('hidden');
+  }
+  function updateBusy(done, total) {
+    el('busyDone').textContent = done;
+    el('busyFill').style.width = Math.round(done / total * 100) + '%';
+    var left = Math.max(0, total - done);
+    el('busyEta').textContent = left
+      ? '残り' + left + '枚（およそ' + Math.max(1, Math.round(left * SEC_PER_PHOTO / CONCURRENCY / 60)) + '分）'
+      : 'まとめ中…';
+  }
+  function hideBusy() { el('busy').classList.add('hidden'); }
+  el('busyHide').addEventListener('click', hideBusy);
 
   el('uploadBtn').addEventListener('click', function () {
     if (!pendingFiles.length) return;
     el('uploadBtn').disabled = true;
     el('shotSummary').classList.add('hidden');
+    closeLightbox();
 
+    var files = pendingFiles.slice();
     var list = el('shotList');
     list.innerHTML = '';
-    var rows = pendingFiles.map(function (f) {
+    shotItems = files.map(function (f) {
       var li = document.createElement('li');
       li.innerHTML = '<div class="spinner-line"><span class="spinner"></span>読み取り中… ' + escapeHtml(f.name || 'レシート') + '</div>';
       list.appendChild(li);
-      return li;
+      return { row: li, file: f, id: null, month: null, kind: 'wait' };
     });
 
-    var queue = pendingFiles.map(function (f, i) { return { file: f, row: rows[i] }; });
-    var done = 0, errors = 0, review = 0, dup = 0;
-
-    function paint(row, mark, name, amount, why) {
-      var html = '<div class="line"><span class="mark">' + mark + '</span>'
-        + '<span class="name">' + escapeHtml(name) + '</span>'
-        + (amount != null ? '<span class="amt">' + yen(amount) + '</span>' : '') + '</div>';
-      if (why) {
-        html += '<div class="why">' + escapeHtml(why) + '</div>'
-          + '<div class="go"><button class="ghost mini" data-go-fix="1">直すで確認 ›</button></div>';
-      }
-      row.innerHTML = html;
-      var b = row.querySelector('[data-go-fix]');
-      if (b) b.addEventListener('click', function () { switchView('fixView'); loadFix(); });
-    }
+    var total = files.length, done = 0, errors = 0, review = 0, dup = 0, finished = 0;
+    showBusy(total);
+    keepAwake(true);
 
     function finish() {
       var parts = [];
@@ -200,34 +270,92 @@
       s.classList.remove('hidden');
       pendingFiles = [];
       renderPreviews();
-      loaded.fix = false; loaded.see = false;   // 次に開くとき取り直す
-      refreshBadge();
+      loaded.see = false;              // 「見る」は次に開くとき取り直す
+      hideBusy();
+      keepAwake(false);
+      syncFix({ silent: true });       // 要確認リストとバッジを最新に
     }
 
-    function step() {
-      if (!queue.length) { finish(); return; }
-      var item = queue.shift();
-      toBase64(item.file).then(function (b64) {
+    function handle(item) {
+      return toBase64(item.file).then(function (b64) {
         return apiPost({ action: 'upload', filename: item.file.name, mimeType: item.file.type || 'image/jpeg', dataBase64: b64 });
       }).then(function (res) {
         if (res && res.ok) {
           var t = res.transaction || {};
-          if (res.duplicate) { dup++; paint(item.row, '⚠️', (t.store || 'レシート') + '（取込済み）', t.total, '同じレシートが既にあります'); }
-          else if (t.status === '要確認') { done++; review++; paint(item.row, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
-          else { done++; paint(item.row, '✅', t.store || '(店名不明)', t.total, ''); }
+          item.id = t.id || null;
+          item.month = res.month || null;
+          if (res.duplicate) { dup++; item.kind = 'dup'; paintShot(item, '⚠️', (t.store || 'レシート') + '（取込済み）', t.total, '同じレシートが既にあります'); }
+          else if (t.status === '要確認') { done++; review++; item.kind = 'review'; paintShot(item, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
+          else { done++; item.kind = 'ok'; paintShot(item, '✅', t.store || '(店名不明)', t.total, ''); }
         } else {
-          errors++;
-          paint(item.row, '⛔', '読み取れませんでした', null, (res && res.error) || '');
+          errors++; item.kind = 'error';
+          paintShot(item, '⛔', '読み取れませんでした', null, (res && res.error) || '');
         }
-        step();
       }).catch(function () {
-        errors++;
-        paint(item.row, '⛔', '通信エラー', null, '');
-        step();
+        errors++; item.kind = 'error';
+        paintShot(item, '⛔', '通信エラー', null, '');
+      }).then(function () {
+        finished++;
+        updateBusy(finished, total);
       });
     }
-    step();
+
+    // 同時 CONCURRENCY 枚まで並行。サーバ側は書き込みをロックで直列化しているので安全
+    var queue = shotItems.slice();
+    var running = 0;
+    (function pump() {
+      if (!queue.length && running === 0) { finish(); return; }
+      while (queue.length && running < CONCURRENCY) {
+        running++;
+        handle(queue.shift()).then(function () { running--; pump(); });
+      }
+    })();
   });
+
+  /** 「読み取り結果」の1行を描き直す。直すタブでの修正結果もここに反映する */
+  function paintShot(item, mark, name, amount, why) {
+    var html = '<div class="line"><span class="mark">' + mark + '</span>'
+      + '<span class="name">' + escapeHtml(name) + '</span>'
+      + (amount != null ? '<span class="amt">' + yen(amount) + '</span>' : '') + '</div>';
+    if (why) {
+      html += '<div class="why">' + escapeHtml(why) + '</div>'
+        + '<div class="go"><button class="ghost mini" data-go-fix="1">直すで確認 ›</button></div>';
+    }
+    item.row.innerHTML = html;
+    var b = item.row.querySelector('[data-go-fix]');
+    if (b) b.addEventListener('click', function () { switchView('fixView'); });
+  }
+
+  /**
+   * 直すタブの内容に合わせて「読み取り結果」を書き直す。
+   * 要確認リストから消えた取引は確定とみなして ✅ に戻す。
+   */
+  function syncShotMarks() {
+    if (!shotItems.length) return;
+    var byId = {};
+    reviewData.forEach(function (t) { byId[t.id] = t; });
+    var recentById = {};
+    recentData.forEach(function (t) { recentById[t.id] = t; });
+    shotItems.forEach(function (item) {
+      if (!item.id || item.kind === 'error' || item.kind === 'dup' || item.kind === 'wait') return;
+      var t = byId[item.id];
+      if (t) { item.kind = 'review'; paintShot(item, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); return; }
+      var r = recentById[item.id];
+      if (item.kind !== 'ok' || r) {
+        item.kind = 'ok';
+        paintShot(item, '✅', (r && r.store) || shotName(item), r ? r.total : shotAmount(item), '');
+      }
+    });
+  }
+  function shotName(item) {
+    var n = item.row.querySelector('.name');
+    return n ? n.textContent : '(店名不明)';
+  }
+  function shotAmount(item) {
+    var a = item.row.querySelector('.amt');
+    if (!a) return null;
+    return Number(String(a.textContent).replace(/[^0-9-]/g, '')) || 0;
+  }
 
   function toBase64(file) {
     return new Promise(function (resolve, reject) {
@@ -255,24 +383,66 @@
     el('recentCard').classList.toggle('hidden', seg !== 'recent');
   }
 
+  // ===== 端末側キャッシュ =====
+  // 「直す」は毎回サーバが全月を読み直していたため待ち時間が長かった。
+  // 前回の結果を端末に持っておき、まず即表示 → 裏で版数(rev)を照合し、
+  // 変わっていれば差し替える。変わっていなければ通信は数百バイトで済む。
+  function readFixCache() {
+    try { return JSON.parse(localStorage.getItem(FIX_KEY) || 'null'); } catch (e) { return null; }
+  }
+  function writeFixCache(o) {
+    try { localStorage.setItem(FIX_KEY, JSON.stringify(o)); } catch (e) { /* 容量超過などは無視 */ }
+  }
+  function setFixStatus(msg) { var e2 = el('fixStatus'); if (e2) e2.textContent = msg || ''; }
+
+  function applyFixData(reviews, recent) {
+    reviewData = reviews || [];
+    recentData = recent || [];
+    renderReviewList();
+    renderRecentList();
+    setBadge(reviewData.length);
+    syncShotMarks();
+  }
+
+  /**
+   * 要確認と直近の読み取りを取り直す。
+   * opts.silent … 画面の「読み込み中」表示を出さない（バックグラウンド更新）
+   * opts.force  … 版数が同じでも中身を取り直す
+   */
+  function syncFix(opts) {
+    opts = opts || {};
+    var cache = readFixCache();
+    var hasCache = !!(cache && cache.reviews);
+    if (hasCache && !fixPainted) { applyFixData(cache.reviews, cache.recent); fixPainted = true; }
+
+    if (!opts.silent) {
+      if (hasCache) setFixStatus('最新か確認中…');
+      else {
+        el('reviewList').innerHTML = '<li class="muted small">読み込み中…</li>';
+        el('recentList').innerHTML = '<li class="muted small">読み込み中…</li>';
+      }
+    }
+
+    var params = (cache && cache.rev && !opts.force) ? { rev: cache.rev } : null;
+    return apiGet('fix', params).then(function (res) {
+      if (!res || res.error) { setFixStatus('接続エラー'); return; }
+      if (res.unchanged) { setFixStatus(''); return; }
+      applyFixData(res.reviews, res.recent);
+      fixPainted = true;
+      writeFixCache({ rev: res.rev, reviews: reviewData, recent: recentData });
+      setFixStatus('');
+    }).catch(function () {
+      setFixStatus('接続エラー');
+      if (!hasCache) {
+        el('reviewList').innerHTML = '<li class="muted small">接続エラー</li>';
+        el('recentList').innerHTML = '<li class="muted small">接続エラー</li>';
+      }
+    });
+  }
+
   function loadFix() {
     loaded.fix = true;
-    el('reviewList').innerHTML = '<li class="muted small">読み込み中…</li>';
-    el('recentList').innerHTML = '<li class="muted small">読み込み中…</li>';
-
-    apiGet('reviews').then(function (res) {
-      reviewData = (res && res.transactions) || [];
-      renderReviewList();
-      setBadge(reviewData.length);
-    }).catch(function () { el('reviewList').innerHTML = '<li class="muted small">接続エラー</li>'; });
-
-    apiGet('transactions', { month: currentMonth() }).then(function (res) {
-      var list = ((res && res.transactions) || []).slice().sort(function (a, b) {
-        return String(b.scanned_at || '').localeCompare(String(a.scanned_at || ''));
-      }).slice(0, 10);
-      recentData = list.map(function (t) { t.month = res.month; return t; });
-      renderRecentList();
-    }).catch(function () { el('recentList').innerHTML = '<li class="muted small">接続エラー</li>'; });
+    return syncFix({});
   }
 
   function renderReviewList() {
@@ -383,10 +553,18 @@
     });
     el('delTxBtn').addEventListener('click', function () {
       if (!confirm('この取引を削除しますか？元に戻せません。')) return;
-      apiPost({ action: 'delete_txn', month: cur.month, id: cur.id }).then(function (res) {
-        if (res && res.ok) { closeSheet(); loaded.see = false; loadFix(); }
-        else alert('削除に失敗: ' + ((res && res.error) || ''));
-      }).catch(function () { alert('通信エラー'); });
+      var gone = cur.id;
+      setSheetBusy(true, '削除中…');
+      apiPost({ action: 'delete_txn', month: cur.month, id: gone }).then(function (res) {
+        setSheetBusy(false);
+        if (!res || !res.ok) { alert('削除に失敗: ' + ((res && res.error) || '')); return; }
+        closeSheet();
+        loaded.see = false;
+        reviewData = reviewData.filter(function (x) { return x.id !== gone; });
+        recentData = recentData.filter(function (x) { return x.id !== gone; });
+        renderReviewList(); renderRecentList(); setBadge(reviewData.length); syncShotMarks();
+        writeFixCache({ rev: res.rev || '', reviews: reviewData, recent: recentData });
+      }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
     });
   }
 
@@ -439,10 +617,19 @@
       + '<button class="i-del">🗑</button></div>';
   }
 
+  function setSheetBusy(on, label) {
+    var btn = el('sheetSave');
+    el('sheet').classList.toggle('busy', !!on);
+    btn.disabled = !!on;
+    el('sheetCancel').disabled = !!on;
+    btn.innerHTML = on
+      ? '<span class="spinner light"></span>' + (label || '保存中…')
+      : '保存';
+  }
+
   el('sheetSave').addEventListener('click', function () {
     if (!cur) return closeSheet();
-    var btn = el('sheetSave');
-    btn.disabled = true;
+    var target = { id: cur.id, month: cur.month, src: curSrc };
     var fields = {
       store: el('f_store').value,
       purchase_date: el('f_date').value,
@@ -452,14 +639,31 @@
       status: el('f_status').value,
       items: cur.items.map(function (i) { return { name: i.name, price: Number(i.price) || 0, qty: null, category: '' }; })
     };
-    apiPost({ action: 'correct', month: cur.month, id: cur.id, fields: fields }).then(function (res) {
-      btn.disabled = false;
+    setSheetBusy(true);
+    apiPost({ action: 'correct', month: target.month, id: target.id, fields: fields }).then(function (res) {
+      setSheetBusy(false);
       if (!res || !res.ok) { alert('保存に失敗: ' + ((res && res.error) || '')); return; }
       closeSheet();
-      loaded.see = false;
-      loadFix();
-    }).catch(function () { btn.disabled = false; alert('通信エラー'); });
+      loaded.see = false;                       // 「見る」は次に開くとき取り直す
+      applyLocalUpdate(res.transaction || null, target, res.rev);
+    }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
   });
+
+  /**
+   * 保存結果を待たずに画面を合わせる（サーバは保存済み）。
+   * 要確認から外れたらリストからも「撮る」の結果からも即座に消す。
+   */
+  function applyLocalUpdate(t, target, rev) {
+    if (!t) { syncFix({ silent: true, force: true }); return; }
+    reviewData = reviewData.filter(function (x) { return x.id !== t.id; });
+    if (t.status === '要確認') reviewData.unshift(t);
+    recentData = recentData.map(function (x) { return x.id === t.id ? t : x; });
+    renderReviewList();
+    renderRecentList();
+    setBadge(reviewData.length);
+    syncShotMarks();
+    writeFixCache({ rev: rev || '', reviews: reviewData, recent: recentData });
+  }
 
   // ===== バッジ =====
   function setBadge(n) {
@@ -468,11 +672,9 @@
     else b.classList.add('hidden');
   }
   function refreshBadge() {
-    apiGet('reviews').then(function (res) {
-      reviewData = (res && res.transactions) || [];
-      setBadge(reviewData.length);
-      if (activeView === 'fixView') renderReviewList();
-    }).catch(function () {});
+    var cache = readFixCache();
+    if (cache && cache.reviews) setBadge(cache.reviews.length);   // まず即表示
+    syncFix({ silent: true });
   }
 
   // ===================================================================
@@ -663,21 +865,25 @@
     if (analysis && analysis.text) {
       body.textContent = analysis.text;
       body.classList.remove('muted');
-      meta.textContent = fmtStamp(analysis.generated_at);
+      var st = fmtStamp(analysis.generated_at);
+      meta.textContent = st ? st.replace('更新 ', '') + ' 時点の内容' : '作成日時が不明';
+      el('analyzeBtn').textContent = '分析をやり直す';
     } else {
       body.textContent = '「分析を実行」を押すと、その月の支出傾向をClaudeがまとめます。';
       body.classList.add('muted');
-      meta.textContent = '';
+      meta.textContent = 'まだ分析していません';
+      el('analyzeBtn').textContent = '分析を実行';
     }
   }
 
   el('analyzeBtn').addEventListener('click', function () {
     var btn = el('analyzeBtn');
     btn.disabled = true; btn.textContent = '分析中…';
+    el('analysisMeta').textContent = 'Claudeが分析中です（30秒ほどかかります）';
     apiPost({ action: 'analyze', month: selMonth }).then(function (res) {
-      btn.disabled = false; btn.textContent = '分析を実行';
+      btn.disabled = false; btn.textContent = '分析をやり直す';
       if (res && res.text) renderAnalysis(res);
-      else alert('分析に失敗: ' + ((res && res.error) || ''));
+      else { renderAnalysis(null); alert('分析に失敗: ' + ((res && res.error) || '')); }
     }).catch(function () { btn.disabled = false; btn.textContent = '分析を実行'; alert('通信エラー'); });
   });
 
@@ -706,8 +912,8 @@
         ptrText.textContent = '更新中…';
         ptr.style.height = '36px';
         if (activeView === 'seeView') loadSee();
-        else if (activeView === 'fixView') loadFix();
-        else refreshBadge();
+        else if (activeView === 'fixView') syncFix({ force: true });
+        else syncFix({ silent: true, force: true });
         setTimeout(reset, 600);
       } else reset();
       function reset() {

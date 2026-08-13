@@ -44,6 +44,7 @@
         </div>
         <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple hidden>
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
+        <p id="pickCount" class="muted small pick-count"></p>
         <div id="previewList" class="preview-list"></div>
         <button id="uploadBtn" class="primary" disabled>アップロード</button>
         <p class="muted small" style="margin:9px 0 0">アップロードすると自動で読み取ります。直しは「直す」タブで。</p>
@@ -74,6 +75,7 @@
       </section>
 
       <p class="muted small hint">行をタップすると修正できます。金額を直すと「不明分」は自動で計算し直されます。</p>
+      <p id="fixStatus" class="muted xsmall sync-line"></p>
     </div>
 
     <!-- ===== ３．見る ===== -->
@@ -127,9 +129,9 @@
       </section>
 
       <section class="card">
-        <div class="card-head"><h2>AI分析</h2><span id="analysisMeta" class="muted xsmall"></span></div>
+        <div class="card-head"><h2>AI分析</h2><button id="analyzeBtn" class="ghost mini">分析を実行</button></div>
+        <p id="analysisMeta" class="muted xsmall analysis-meta">まだ分析していません</p>
         <div id="analysisBody" class="analysis-body muted">「分析を実行」を押すと、その月の支出傾向をClaudeがまとめます。</div>
-        <button id="analyzeBtn" class="ghost" style="margin-top:10px">分析を実行</button>
       </section>
     </div>
   </main>
@@ -142,6 +144,32 @@
     <div class="sheet-foot">
       <button id="sheetCancel" class="ghost">キャンセル</button>
       <button id="sheetSave" class="primary">保存</button>
+    </div>
+  </div>
+
+  <!-- ===== 写真の拡大表示 ===== -->
+  <div id="lightbox" class="lightbox hidden">
+    <div class="lb-bar">
+      <span id="lbLabel" class="lb-label"></span>
+      <button id="lbClose" class="lb-x" aria-label="閉じる">✕</button>
+    </div>
+    <div class="lb-stage"><img id="lbImg" alt="選んだレシート"></div>
+    <div class="lb-foot">
+      <button id="lbPrev" class="ghost">‹ 前</button>
+      <button id="lbDel" class="danger">この写真を外す</button>
+      <button id="lbNext" class="ghost">次 ›</button>
+    </div>
+  </div>
+
+  <!-- ===== 読み取り中のお知らせ ===== -->
+  <div id="busy" class="busy-veil hidden">
+    <div class="busy-card">
+      <h3>レシートを読み取り中</h3>
+      <p class="busy-count"><b id="busyDone">0</b> / <span id="busyTotal">0</span> 枚</p>
+      <div class="busy-track"><div id="busyFill" class="busy-fill"></div></div>
+      <p id="busyEta" class="muted small"></p>
+      <p class="busy-note">アプリを開いたままお待ちください。ほかのアプリに切り替えると読み取りが中断することがあります。画面が消えないようにしています。</p>
+      <button id="busyHide" class="ghost">閉じる（読み取りは続きます）</button>
     </div>
   </div>
 

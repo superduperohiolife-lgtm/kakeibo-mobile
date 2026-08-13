@@ -89,8 +89,66 @@ button.mini { width: auto; padding: 7px 13px; font-size: 13px; }
   color: var(--muted); cursor: pointer;
 }
 .upload-icon { font-size: 34px; }
-.preview-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.preview-list img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.pick-count { margin: 0 0 8px; }
+.preview-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.preview-list:empty { margin-bottom: 0; }
+.thumb { position: relative; }
+.thumb img {
+  width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+  border-radius: 8px; border: 1px solid var(--border); display: block; cursor: pointer;
+}
+.thumb-no {
+  position: absolute; left: 3px; bottom: 3px; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; background: rgba(0,0,0,.55); color: #fff;
+  font-size: 11px; line-height: 17px; text-align: center;
+}
+.thumb-del {
+  position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; padding: 0;
+  border: 1px solid var(--border); border-radius: 12px; background: #fff; color: var(--error);
+  font-size: 15px; line-height: 1; font-family: inherit; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+
+/* 写真の拡大表示 */
+.lightbox {
+  position: fixed; inset: 0; z-index: 60; background: #111;
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+}
+.lightbox.hidden { display: none; }
+.lb-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; color: #fff; }
+.lb-label { font-size: 14px; }
+.lb-x { border: 0; background: none; color: #fff; font-size: 20px; padding: 4px 8px; cursor: pointer; font-family: inherit; }
+.lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.lb-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.lb-foot { display: flex; gap: 8px; padding: 12px 14px; }
+.lb-foot button { flex: 1; margin: 0; }
+.lb-foot .ghost { background: #2a2a2a; color: #fff; border-color: #444; }
+button.danger {
+  padding: 11px; border: 1px solid #eccfcb; border-radius: 10px;
+  background: #fdf1f0; color: var(--error); font-size: 14px; font-family: inherit; cursor: pointer;
+}
+
+/* 読み取り中のお知らせ */
+.busy-veil {
+  position: fixed; inset: 0; z-index: 70; background: rgba(20,30,26,.55);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.busy-veil.hidden { display: none; }
+.busy-card { background: #fff; border-radius: 16px; padding: 22px 20px; width: 100%; max-width: 330px; text-align: center; }
+.busy-card h3 { margin: 0 0 10px; font-size: 16px; }
+.busy-count { margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+.busy-count b { font-size: 26px; color: var(--data); font-weight: 700; }
+.busy-track { height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; margin-bottom: 10px; }
+.busy-fill { height: 100%; width: 0; background: var(--data); border-radius: 4px; transition: width .3s ease; }
+.busy-note { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 10px 0 14px; text-align: left; }
+
+/* 保存中 */
+.sheet.busy .sheet-body { opacity: .45; pointer-events: none; }
+.sheet.busy .sheet-foot button { pointer-events: none; }
+
+.sync-line { margin: 6px 4px 0; min-height: 15px; }
+.analysis-meta { margin: -4px 0 10px; }
 
 .shot-list { list-style: none; padding: 0; margin: 0; }
 .shot-list > li { padding: 11px 0; border-bottom: 1px solid var(--border); }
@@ -114,6 +172,8 @@ button.mini { width: auto; padding: 7px 13px; font-size: 13px; }
   border: 2px solid var(--border); border-top-color: var(--green);
   display: inline-block; animation: spin .7s linear infinite;
 }
+.spinner.light { border-color: rgba(255,255,255,.45); border-top-color: #fff; margin-right: 7px; vertical-align: -2px; }
+.sheet-foot button:disabled { opacity: .85; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== 直す ===== */
