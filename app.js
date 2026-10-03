@@ -15,8 +15,9 @@
   var GAS_URL = CFG.GAS_URL || '';
   var TOKEN_KEY = 'kakeibo_token';
 
-  var DAILY_CATS = ['ライフライン', '食費', '日用品', '衣料・服飾', '外食', '交通', '医療・健康', '行政手数料', '雑費'];
-  var EXTRA_CATS = ['家電', '家具・インテリア', '調理・食器', '生活用品（大型）', '自転車・乗り物', '旅行・レジャー', '車関連', '住宅・修繕', '冠婚葬祭', '医療・税金・保険（高額/年払い）', 'その他臨時'];
+  // カテゴリ体系（2026-10 改定・家計調査準拠）。GAS の Reclass.gs と同じ並び
+  var DAILY_CATS = ['食費', '外食', '日用品', '衣料・服飾', '理美容', '医療・健康', '交通', '車（給油・駐車）', '教育・書籍・文具', 'ペット', 'ライフライン', '行政手数料', '雑費'];
+  var EXTRA_CATS = ['家電', '家具・インテリア', '調理・食器', '生活用品（大型）', '自転車・乗り物', '旅行・レジャー', '車関連', '住宅・修繕', '冠婚葬祭', '学校・入学用品', '医療・税金・保険（高額/年払い）', 'その他臨時'];
   var ALL_CATS = DAILY_CATS.concat(EXTRA_CATS);
 
   var pendingFiles = [];
@@ -499,7 +500,7 @@
       note: reviewNoteHtml(t),
       original_currency: t.original_currency, original_total: t.original_total, fx_rate: t.fx_rate,
       items: (t.items || []).filter(function (i) { return !i.auto; })
-        .map(function (i) { return { name: i.name || '', price: Number(i.price) || 0 }; })
+        .map(function (i) { return { name: i.name || '', price: Number(i.price) || 0, category: i.category || '' }; })
     };
     el('sheetBody').innerHTML = sheetHtml(cur);
     bindSheet();
@@ -637,7 +638,8 @@
       expense_type: el('f_type').value,
       category: el('f_cat').value,
       status: el('f_status').value,
-      items: cur.items.map(function (i) { return { name: i.name, price: Number(i.price) || 0, qty: null, category: '' }; })
+      // 品目カテゴリは保持（空の行はサーバが取引カテゴリで補完）
+      items: cur.items.map(function (i) { return { name: i.name, price: Number(i.price) || 0, qty: null, category: i.category || '' }; })
     };
     setSheetBusy(true);
     apiPost({ action: 'correct', month: target.month, id: target.id, fields: fields }).then(function (res) {
