@@ -285,7 +285,7 @@
           var t = res.transaction || {};
           item.id = t.id || null;
           item.month = res.month || null;
-          if (res.duplicate) { dup++; item.kind = 'dup'; paintShot(item, '⚠️', (t.store || 'レシート') + '（取込済み）', t.total, '同じレシートが既にあります'); }
+          if (res.duplicate) { dup++; item.kind = 'dup'; paintShot(item, '⚠️', (t.store || 'レシート') + '（登録済み）', t.total, res.message || '同じレシートが既にあります'); }
           else if (t.status === '要確認') { done++; review++; item.kind = 'review'; paintShot(item, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
           else { done++; item.kind = 'ok'; paintShot(item, '✅', t.store || '(店名不明)', t.total, ''); }
         } else {
