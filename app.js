@@ -1,7 +1,8 @@
 /* app.js — 写真で家計簿（スマホ版）
  *
  * 3タブ構成:
- *   １．撮る … 撮影とアップロードに特化。結果は 可否＋店名＋金額 だけ。要確認は「直す」へ誘導
+ *   １．入力 … 撮影・写真のアップロードと手入力。結果は 可否＋店名＋金額 だけ。要確認は「直す」へ誘導
+ *            手入力は修正シートを新規モードで開き、action=manual で登録する（レシートの無い支出向け）
  *   ２．直す … 要確認の修正（月をまたいで全件）と直近の読み取り。明細は手入力で編集できる
  *   ３．見る … 集計と分類のみ。要確認の個別リストは出さない（件数はタブのバッジ）
  *
@@ -47,6 +48,10 @@
     });
   }
 
+  function todayStr() {
+    var d = new Date(), m = d.getMonth() + 1, dd = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+  }
   function currentMonth() {
     var d = new Date(), m = d.getMonth() + 1;
     return d.getFullYear() + '-' + (m < 10 ? '0' + m : m);
@@ -146,7 +151,7 @@
   }
 
   // ===================================================================
-  // １．撮る
+  // １．入力
   // ===================================================================
   function onPick(e) {
     Array.prototype.slice.call(e.target.files || []).forEach(function (f) { pendingFiles.push(f); });
@@ -502,6 +507,26 @@
       items: (t.items || []).filter(function (i) { return !i.auto; })
         .map(function (i) { return { name: i.name || '', price: Number(i.price) || 0, category: i.category || '' }; })
     };
+    showSheet('取引の修正');
+  }
+
+  /** 手入力（新規登録）。修正シートを新規モードで開く */
+  function openNewSheet() {
+    curSrc = 'new'; curIdx = -1;
+    cur = {
+      id: null, isNew: true, month: currentMonth(),
+      store: '', purchase_date: todayStr(), total: 0, tax: 0,
+      expense_type: '日常', category: '食費', status: '確定', note: '',
+      items: []
+    };
+    showSheet('手で入力');
+    setTimeout(function () { var s0 = el('f_store'); if (s0) s0.focus(); }, 50);
+  }
+  el('manualBtn').addEventListener('click', openNewSheet);
+
+  function showSheet(title) {
+    el('sheetTitle').textContent = title;
+    el('sheetSave').textContent = cur.isNew ? '登録' : '保存';
     el('sheetBody').innerHTML = sheetHtml(cur);
     bindSheet();
     renderItems();
@@ -524,27 +549,36 @@
     }).join('');
     var fx = (t.original_currency && t.original_currency !== 'JPY')
       ? '<p class="muted xsmall" style="margin:-4px 0 8px">元通貨 ' + escapeHtml(t.original_currency) + ' ' + t.original_total + '（レート ' + t.fx_rate + ' で換算）</p>' : '';
+    var req = t.isNew ? '<span class="req">*</span>' : '';
+    var typeSel = '<select id="f_type"><option' + (t.expense_type === '日常' ? ' selected' : '') + '>日常</option><option' + (t.expense_type === '臨時' ? ' selected' : '') + '>臨時</option></select>';
+    // 新規（手入力）では状態欄と削除ボタンを出さない。状態はサーバが判定する
+    var row2 = t.isNew
+      ? '<div class="fld-row">'
+        + '  <div><label class="fld">区分</label>' + typeSel + '</div>'
+        + '  <div><label class="fld">カテゴリ</label><select id="f_cat">' + cats + '</select></div>'
+        + '</div>'
+      : '<div class="fld-row">'
+        + '  <div><label class="fld">区分</label>' + typeSel + '</div>'
+        + '  <div><label class="fld">状態</label><select id="f_status"><option' + (t.status === '確定' ? ' selected' : '') + '>確定</option><option' + (t.status === '要確認' ? ' selected' : '') + '>要確認</option></select></div>'
+        + '</div>'
+        + '<label class="fld">カテゴリ</label><select id="f_cat">' + cats + '</select>';
     return t.note
-      + '<label class="fld">店名</label><input id="f_store" type="text" value="' + escapeHtml(t.store) + '">'
+      + '<label class="fld">' + (t.isNew ? '店名・内容' : '店名') + req + '</label><input id="f_store" type="text" value="' + escapeHtml(t.store) + '"' + (t.isNew ? ' placeholder="例：八百屋、自販機、町内会費"' : '') + '>'
       + '<div class="fld-row">'
-      + '  <div><label class="fld">日付</label><input id="f_date" type="date" value="' + escapeHtml(t.purchase_date) + '"></div>'
-      + '  <div><label class="fld">金額（円）</label><input id="f_total" type="number" inputmode="numeric" value="' + t.total + '"></div>'
+      + '  <div><label class="fld">日付' + req + '</label><input id="f_date" type="date" value="' + escapeHtml(t.purchase_date) + '"></div>'
+      + '  <div><label class="fld">金額（円）' + req + '</label><input id="f_total" type="number" inputmode="numeric" value="' + (t.isNew && !t.total ? '' : t.total) + '" placeholder="0"></div>'
       + '</div>' + fx
-      + '<div class="fld-row">'
-      + '  <div><label class="fld">区分</label><select id="f_type"><option' + (t.expense_type === '日常' ? ' selected' : '') + '>日常</option><option' + (t.expense_type === '臨時' ? ' selected' : '') + '>臨時</option></select></div>'
-      + '  <div><label class="fld">状態</label><select id="f_status"><option' + (t.status === '確定' ? ' selected' : '') + '>確定</option><option' + (t.status === '要確認' ? ' selected' : '') + '>要確認</option></select></div>'
-      + '</div>'
-      + '<label class="fld">カテゴリ</label><select id="f_cat">' + cats + '</select>'
-      + '<label class="fld" style="margin-top:14px">品目明細</label>'
+      + row2
+      + '<label class="fld" style="margin-top:14px">品目明細' + (t.isNew ? '（任意）' : '') + '</label>'
       + '<div class="item-editor" id="itemEditor"></div>'
       + '<div class="item-tally" id="itemTally"></div>'
       + '<button class="add-item" id="addItemBtn">＋ 品目を追加</button>'
-      + '<button class="del-btn" id="delTxBtn">この取引を削除</button>';
+      + (t.isNew ? '' : '<button class="del-btn" id="delTxBtn">この取引を削除</button>');
   }
   function bindSheet() {
     el('f_total').addEventListener('input', function () {
       cur.total = Number(this.value) || 0;
-      renderItems();
+      renderTally();
     });
     el('addItemBtn').addEventListener('click', function () {
       cur.items.push({ name: '', price: 0 });
@@ -552,7 +586,7 @@
       var ns = document.querySelectorAll('#itemEditor .item-row:not(.auto) input.i-name');
       if (ns.length) ns[ns.length - 1].focus();
     });
-    el('delTxBtn').addEventListener('click', function () {
+    if (el('delTxBtn')) el('delTxBtn').addEventListener('click', function () {
       if (!confirm('この取引を削除しますか？元に戻せません。')) return;
       var gone = cur.id;
       setSheetBusy(true, '削除中…');
@@ -569,7 +603,11 @@
     });
   }
 
-  /** 明細エディタ。実明細＋（税抜表記なら消費税）＋不明分 を常に総額に一致させて表示する */
+  /**
+   * 明細エディタ。実明細＋（税抜表記なら消費税）＋不明分 を常に総額に一致させて表示する。
+   * 入力中は行を作り直さない（作り直すと次の欄をタップしたときにフォーカスが外れるため）。
+   * 入力のたびに renderTally() で自動行と合計だけを描き直す。
+   */
   function renderItems() {
     var box = el('itemEditor');
     var rows = cur.items.map(function (it, i) {
@@ -580,6 +618,22 @@
         + '</div>';
     }).join('');
 
+    box.innerHTML = rows + '<div id="autoRows"></div>';
+    Array.prototype.forEach.call(box.querySelectorAll('input[data-i]'), function (inp) {
+      inp.addEventListener('input', function () {
+        var i = +this.getAttribute('data-i'), f = this.getAttribute('data-f');
+        cur.items[i][f] = (f === 'price') ? (Number(this.value) || 0) : this.value;
+        renderTally();
+      });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-del]'), function (b) {
+      b.addEventListener('click', function () { cur.items.splice(+this.getAttribute('data-del'), 1); renderItems(); });
+    });
+    renderTally();
+  }
+
+  /** 自動行（消費税・不明分）と明細合計の表示だけを描き直す */
+  function renderTally() {
     var sum = cur.items.reduce(function (a, x) { return a + (Number(x.price) || 0); }, 0);
     var auto = '';
     var tax = Number(cur.tax) || 0;
@@ -589,17 +643,7 @@
     var gap = cur.total - sum;
     if (cur.items.length && gap !== 0) { auto += autoRow('不明分', gap); sum += gap; }
 
-    box.innerHTML = rows + auto;
-    Array.prototype.forEach.call(box.querySelectorAll('input[data-i]'), function (inp) {
-      inp.addEventListener('change', function () {
-        var i = +this.getAttribute('data-i'), f = this.getAttribute('data-f');
-        cur.items[i][f] = (f === 'price') ? (Number(this.value) || 0) : this.value;
-        renderItems();
-      });
-    });
-    Array.prototype.forEach.call(box.querySelectorAll('[data-del]'), function (b) {
-      b.addEventListener('click', function () { cur.items.splice(+this.getAttribute('data-del'), 1); renderItems(); });
-    });
+    el('autoRows').innerHTML = auto;
 
     var tally = el('itemTally');
     if (!cur.items.length) {
@@ -625,11 +669,12 @@
     el('sheetCancel').disabled = !!on;
     btn.innerHTML = on
       ? '<span class="spinner light"></span>' + (label || '保存中…')
-      : '保存';
+      : ((cur && cur.isNew) ? '登録' : '保存');
   }
 
   el('sheetSave').addEventListener('click', function () {
     if (!cur) return closeSheet();
+    if (cur.isNew) return saveNew(false);
     var target = { id: cur.id, month: cur.month, src: curSrc };
     var fields = {
       store: el('f_store').value,
@@ -650,6 +695,61 @@
       applyLocalUpdate(res.transaction || null, target, res.rev);
     }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
   });
+
+  /**
+   * 手入力の登録。同じ店・日付・金額が既にあるとサーバが need_confirm を返すので、
+   * 確認のうえ force:true で送り直す。電気・水道の同額はサーバ側で登録しない（写真と同じ規則）。
+   */
+  function saveNew(force) {
+    var fields = {
+      store: el('f_store').value.trim(),
+      purchase_date: el('f_date').value,
+      total: Number(el('f_total').value) || 0,
+      expense_type: el('f_type').value,
+      category: el('f_cat').value,
+      items: cur.items.filter(function (i) { return String(i.name || '').trim() || Number(i.price); })
+        .map(function (i) { return { name: i.name, price: Number(i.price) || 0, category: i.category || '' }; })
+    };
+    if (!fields.store) { alert('店名・内容を入力してください'); el('f_store').focus(); return; }
+    if (!fields.purchase_date) { alert('日付を入力してください'); el('f_date').focus(); return; }
+    if (!fields.total) { alert('金額を入力してください'); el('f_total').focus(); return; }
+
+    setSheetBusy(true, '登録中…');
+    apiPost({ action: 'manual', fields: fields, force: !!force }).then(function (res) {
+      setSheetBusy(false);
+      if (res && res.need_confirm) {
+        if (confirm(res.message || '同じ取引が既にあります。それでも登録しますか？')) saveNew(true);
+        return;
+      }
+      if (!res || !res.ok) { alert('登録できませんでした: ' + ((res && res.error) || '')); return; }
+      closeSheet();
+      loaded.see = false;                       // 「見る」は次に開くとき取り直す
+      addManualResult(res.transaction || {}, res.month);
+      var t = res.transaction;
+      if (t && t.id) {
+        if (t.status === '要確認') reviewData.unshift(t);
+        recentData.unshift(t);
+        recentData = recentData.slice(0, 10);
+        renderReviewList();
+        renderRecentList();
+        setBadge(reviewData.length);
+        writeFixCache({ rev: res.rev || '', reviews: reviewData, recent: recentData });
+      }
+    }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
+  }
+
+  /** 手入力の結果を「登録結果」に1行足す（写真の結果と同じ見た目） */
+  function addManualResult(t, month) {
+    var list = el('shotList');
+    if (!shotItems.length) list.innerHTML = '';
+    var li = document.createElement('li');
+    list.insertBefore(li, list.firstChild);
+    var item = { row: li, file: null, id: t.id || null, month: month || null, kind: 'wait' };
+    shotItems.unshift(item);
+    if (t.status === '要確認') { item.kind = 'review'; paintShot(item, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
+    else { item.kind = 'ok'; paintShot(item, '✅', (t.store || '(店名不明)') + '（手入力）', t.total, ''); }
+    el('shotSummary').classList.add('hidden');
+  }
 
   /**
    * 保存結果を待たずに画面を合わせる（サーバは保存済み）。

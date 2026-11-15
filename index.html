@@ -30,10 +30,10 @@
       <p id="authError" class="error"></p>
     </section>
 
-    <!-- ===== １．撮る ===== -->
+    <!-- ===== １．入力（撮影・写真・手入力） ===== -->
     <div id="captureView" class="view">
       <section class="card">
-        <h2>レシートを追加</h2>
+        <h2>支出を追加</h2>
         <div class="pick-row">
           <label for="cameraInput" class="upload-zone">
             <span class="upload-icon">📷</span><span>撮影する</span>
@@ -41,18 +41,21 @@
           <label for="fileInput" class="upload-zone">
             <span class="upload-icon">🖼️</span><span>写真を選ぶ</span>
           </label>
+          <button type="button" id="manualBtn" class="upload-zone">
+            <span class="upload-icon">✍️</span><span>手で入力</span>
+          </button>
         </div>
         <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple hidden>
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
         <p id="pickCount" class="muted small pick-count"></p>
         <div id="previewList" class="preview-list"></div>
         <button id="uploadBtn" class="primary" disabled>アップロード</button>
-        <p class="muted small" style="margin:9px 0 0">アップロードすると自動で読み取ります。直しは「直す」タブで。</p>
+        <p class="muted small" style="margin:9px 0 0">写真はアップロードすると自動で読み取ります。レシートが無い支出は「手で入力」。直しは「直す」タブで。</p>
       </section>
 
       <section class="card">
-        <h2>読み取り結果</h2>
-        <ul id="shotList" class="shot-list"><li class="muted small">まだありません。写真をアップロードすると、ここに結果が出ます。</li></ul>
+        <h2>登録結果</h2>
+        <ul id="shotList" class="shot-list"><li class="muted small">まだありません。写真のアップロードや手入力をすると、ここに結果が出ます。</li></ul>
         <div id="shotSummary" class="shot-summary hidden"></div>
       </section>
     </div>
@@ -176,7 +179,7 @@
   <!-- ===== 下部タブ ===== -->
   <nav id="bottomNav" class="bottom-nav hidden">
     <button class="nav-tab active" data-target="captureView">
-      <span class="nav-ico">📷</span><span class="nav-txt">撮る</span>
+      <span class="nav-ico">➕</span><span class="nav-txt">入力</span>
     </button>
     <button class="nav-tab" data-target="fixView">
       <span class="nav-ico">✏️</span><span class="nav-txt">直す</span><span id="navBadge" class="nav-badge hidden">0</span>

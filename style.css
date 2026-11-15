@@ -358,3 +358,7 @@ label.fld { display: block; font-size: 12px; color: var(--muted); margin: 10px 0
   background: var(--warn); color: #fff; border-radius: 999px;
   font-size: 10px; line-height: 1; padding: 3px 6px; font-weight: 700;
 }
+
+/* 手入力ボタン（label と同じ見た目にそろえる） */
+button.upload-zone { background: none; font: inherit; font-size: inherit; }
+.req { color: var(--error); font-weight: 400; margin-left: 2px; }
