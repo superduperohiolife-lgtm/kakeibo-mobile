@@ -128,7 +128,7 @@
     if (!t) { el('authError').textContent = '合言葉を入力してください'; return; }
     localStorage.setItem(TOKEN_KEY, t);
     apiGet('ping').then(function (res) {
-      if (res && res.ok) { el('authView').classList.add('hidden'); showChrome(true); refreshBadge(); }
+      if (res && res.ok) { el('authView').classList.add('hidden'); showChrome(true); refreshBadge(); paintBudget(); loadBudget(); }
       else { localStorage.removeItem(TOKEN_KEY); el('authError').textContent = '合言葉が違うようです'; }
     }).catch(function () { el('authError').textContent = '接続できません。URL設定を確認してください'; });
   });
@@ -262,6 +262,7 @@
     });
 
     var total = files.length, done = 0, errors = 0, review = 0, dup = 0, finished = 0;
+    var extraCount = 0, dailyAdded = 0, thisMonth = currentMonth();   // 登録直後のひとこと用
     showBusy(total);
     keepAwake(true);
 
@@ -280,6 +281,7 @@
       hideBusy();
       keepAwake(false);
       syncFix({ silent: true });       // 要確認リストとバッジを最新に
+      toastAfterAdd(done, dailyAdded, done > 0 && extraCount === done);
     }
 
     function handle(item) {
@@ -290,6 +292,10 @@
           var t = res.transaction || {};
           item.id = t.id || null;
           item.month = res.month || null;
+          if (!res.duplicate) {
+            if (t.expense_type === '臨時') extraCount++;
+            else if (res.month === thisMonth) dailyAdded += Number(t.total) || 0;
+          }
           if (res.duplicate) { dup++; item.kind = 'dup'; paintShot(item, '⚠️', (t.store || 'レシート') + '（登録済み）', t.total, res.message || '同じレシートが既にあります'); }
           else if (t.status === '要確認') { done++; review++; item.kind = 'review'; paintShot(item, '⚠️', t.store || '(店名不明)', t.total, reviewText(t)); }
           else { done++; item.kind = 'ok'; paintShot(item, '✅', t.store || '(店名不明)', t.total, ''); }
@@ -599,6 +605,7 @@
         recentData = recentData.filter(function (x) { return x.id !== gone; });
         renderReviewList(); renderRecentList(); setBadge(reviewData.length); syncShotMarks();
         writeFixCache({ rev: res.rev || '', reviews: reviewData, recent: recentData });
+        loadBudget();
       }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
     });
   }
@@ -693,6 +700,7 @@
       closeSheet();
       loaded.see = false;                       // 「見る」は次に開くとき取り直す
       applyLocalUpdate(res.transaction || null, target, res.rev);
+      loadBudget();                             // 金額・区分の修正で日常予算の残りが変わる
     }).catch(function () { setSheetBusy(false); alert('通信エラー'); });
   });
 
@@ -726,6 +734,8 @@
       loaded.see = false;                       // 「見る」は次に開くとき取り直す
       addManualResult(res.transaction || {}, res.month);
       var t = res.transaction;
+      var isExtra = !!(t && t.expense_type === '臨時');
+      toastAfterAdd(1, (!isExtra && t && res.month === currentMonth()) ? (Number(t.total) || 0) : 0, isExtra);
       if (t && t.id) {
         if (t.status === '要確認') reviewData.unshift(t);
         recentData.unshift(t);
@@ -809,6 +819,9 @@
     el('prevNote').textContent = '';
 
     var isCurrent = (selMonth === currentMonth());
+    // 予算カード：今月は手元の値で先に描き、裏で取り直す。過去の月は集計が届いてから描く
+    if (isCurrent) { paintBudgetSee(null); loadBudget(); }
+    else { el('budgetDetail').innerHTML = ''; el('budgetCompare').innerHTML = ''; }
     (isCurrent ? apiGet('dashboard') : apiGet('overview', { month: selMonth }))
       .then(function (res) {
         if (!res || res.error) { seeError((res && res.error) || '取得できませんでした'); return; }
@@ -835,6 +848,7 @@
     var totals = d.totals || { all: 0, daily: 0, extraordinary: 0 };
     var prev = d.prev || null;
     el('monthGenerated').textContent = d.generated_at ? fmtStamp(d.generated_at) : 'ライブ集計';
+    if (d.month === selMonth) paintBudgetSee(d);
 
     el('totAll').textContent = yen(totals.all);
     el('totDaily').textContent = yen(totals.daily);
@@ -993,6 +1007,371 @@
     }).catch(function () { btn.disabled = false; btn.textContent = '分析を実行'; alert('通信エラー'); });
   });
 
+  // ===================================================================
+  // ４．日常予算（節約パーツ）
+  //   A. 今月の日常予算カード（入力タブ＝コンパクト版／見るタブ＝詳細版）
+  //   B. ペース表示   C. 先月比の節約額   D. 登録直後のひとこと   E. 予算の設定シート
+  // 対象は日常（expense_type=日常）だけ。臨時は予算計算に含めない。
+  // 予算は GAS の settings.json（action=settings）に1つだけ持つ（毎月同じ額）。
+  // 端末には前回の値を持っておき、まず即表示 → 裏で取り直す。
+  // ===================================================================
+  var BUDGET_KEY = 'kakeibo_budget_v1';
+  var bud = {
+    budget: null,        // 月の日常予算（未設定は null）
+    settingsOk: true,    // settings API が使えるか（GAS 未更新なら false）
+    month: null,         // used を集計した月
+    used: null,          // 今月の日常累計（未取得は null）
+    prevMonth: null,
+    prevDaily: null,     // 先月の日常合計（設定シートの目安に使う）
+    prevToDate: null,    // 先月1日〜先月の同じ日までの日常累計（GAS 未更新なら null）
+    prevHasData: false
+  };
+  var budLoading = null;
+
+  (function readBudgetCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null');
+      if (!c) return;
+      bud.budget = c.budget || null;
+      if (c.month === currentMonth()) {
+        bud.month = c.month; bud.used = c.used; bud.prevMonth = c.prevMonth;
+        bud.prevDaily = c.prevDaily; bud.prevToDate = c.prevToDate; bud.prevHasData = !!c.prevHasData;
+      }
+    } catch (e) { /* 壊れていたら無視 */ }
+  })();
+  function writeBudgetCache() {
+    try { localStorage.setItem(BUDGET_KEY, JSON.stringify(bud)); } catch (e) { /* 容量超過などは無視 */ }
+  }
+
+  /** 予算と今月の日常累計を取り直して、予算カードを描き直す */
+  function loadBudget() {
+    if (!getToken() || !GAS_URL) return Promise.resolve();
+    if (budLoading) return budLoading;
+    var cm = currentMonth();
+    var p1 = apiGet('settings').then(function (res) {
+      if (res && !res.error && Object.prototype.hasOwnProperty.call(res, 'daily_budget')) {
+        bud.budget = Number(res.daily_budget) > 0 ? Number(res.daily_budget) : null;
+        bud.settingsOk = true;
+      } else {
+        bud.settingsOk = false;   // GAS 側が未更新（unknown action）など
+      }
+    }).catch(function () { /* 通信エラー時は手元の値のまま */ });
+    var p2 = apiGet('overview', { month: cm }).then(function (res) {
+      if (!res || res.error) return;
+      var pv = res.prev || {};
+      bud.month = cm;
+      bud.used = res.totals ? (Number(res.totals.daily) || 0) : 0;
+      bud.prevMonth = /^\d{4}-\d{2}$/.test(pv.month || '') ? pv.month : addMonth(cm, -1);
+      bud.prevDaily = pv.totals ? (Number(pv.totals.daily) || 0) : null;
+      bud.prevToDate = (typeof pv.daily_to_date === 'number') ? pv.daily_to_date : null;
+      bud.prevHasData = !!(pv.by_category && pv.by_category.length);
+    }).catch(function () { /* 同上 */ });
+    budLoading = Promise.all([p1, p2]).then(function () {
+      budLoading = null;
+      writeBudgetCache();
+      paintBudget();
+    });
+    return budLoading;
+  }
+
+  /** 今日が何日目か・今月の日数 */
+  function monthDays() {
+    var d = new Date();
+    return { day: d.getDate(), days: new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() };
+  }
+
+  /**
+   * 予算の状態を計算する。
+   * budget: 月の日常予算（未設定は null） / used: 今月の日常累計 / day: 今日が何日目か / days: 今月の日数
+   * ペース: (使った割合 − 経過日数の割合) が +5pt 以下=順調、+15pt 以下=少し早め、それ以上=かなり早め
+   */
+  function calcBudget(budget, used, day, days) {
+    var r = { budget: budget, used: used, day: day, days: days };
+    r.leftDays = days - day + 1;               // 今日を含む残り日数
+    r.elapsed = day / days;                     // 経過日数の割合（今日を含む）
+    if (!budget) { r.state = 'unset'; return r; }
+    r.ratio = used / budget;                    // 使った割合
+    r.remain = budget - used;
+    r.perDay = r.remain > 0 ? Math.floor(r.remain / r.leftDays) : 0;
+    if (used <= 0) r.state = 'empty';
+    else if (r.remain < 0) r.state = 'over';
+    else {
+      var gap = r.ratio - r.elapsed;
+      r.state = gap <= 0.05 ? 'ok' : (gap <= 0.15 ? 'early' : 'much');
+    }
+    return r;
+  }
+
+  var PACE = {
+    ok:    { mark: '◎', label: '順調' },
+    early: { mark: '△', label: '少し早め' },
+    much:  { mark: '▲', label: 'かなり早め' },
+    over:  { mark: '！', label: '予算超過' },
+    empty: { mark: '―', label: 'これから' }
+  };
+  function paceBadge(st) {
+    var p = PACE[st];
+    return '<span class="pace ' + (st === 'empty' ? 'none' : st) + '"><span aria-hidden="true">' + p.mark + '</span>' + p.label + '</span>';
+  }
+  function budgetBar(r) {
+    var w = Math.min(100, Math.max(0, r.ratio * 100));
+    var t = Math.round(r.elapsed * 100);
+    var cls = (r.state === 'ok' || r.state === 'empty') ? '' : r.state;
+    return '<div class="b-bar ' + cls + '" role="img" aria-label="予算の' + Math.round(r.ratio * 100) + '%を使用。月の' + t + '%が経過">'
+      + (r.used > 0 ? '<div class="b-fill" style="width:' + w + '%"></div>' : '')
+      + '<i class="b-today" style="left:' + t + '%"><span>今日</span></i></div>';
+  }
+  function budgetMsg(r) {
+    if (r.state === 'ok') return 'このペースなら予算内におさまりそうです。';
+    if (r.state === 'early') return '少しペースが早めです。1日 ' + yen(r.perDay) + ' を目安にすると予算内です。';
+    if (r.state === 'much') return 'ペースが早めです。残り' + r.leftDays + '日、1日 ' + yen(r.perDay) + ' を目安にしてみましょう。';
+    if (r.state === 'over') return '来月の参考にしましょう。記録はこのまま続けていきましょう。';
+    if (r.state === 'empty') return 'まだ今月の記録がありません。買い物をしたら写真を撮っておきましょう。';
+    return '';
+  }
+  function remainBlock(r) {
+    if (r.state === 'over') return '<div class="b-remain"><span class="b-amt over yen">予算を ' + yen(-r.remain) + ' 超えました</span></div>';
+    return '<div class="b-remain"><span class="b-label">残り</span><span class="b-amt yen">' + yen(r.remain) + '</span></div>';
+  }
+  function perDayLine(r) {
+    if (r.state === 'over') return '';
+    return '<p class="b-perday">1日あたり あと <b class="yen">' + yen(r.perDay) + '</b> 使えます</p>';
+  }
+  function cardOpen(cls, label) {
+    return '<section class="card budget' + (cls ? ' ' + cls : '') + '" role="button" tabindex="0" aria-label="' + label + '">';
+  }
+  function unsetCardHtml(title, usedLabel, used) {
+    return cardOpen('', '予算を設定する')
+      + '<div class="b-head"><span class="b-title">' + title + '</span></div>'
+      + '<div class="b-empty"><span class="ico" aria-hidden="true">📒</span><div>'
+      + '<p>予算を決めると、あといくら使えるか分かります。</p>'
+      + '<span class="go">予算を決める ›</span></div></div>'
+      + (usedLabel && used != null ? '<div class="b-used-only"><span>' + usedLabel + '</span><b class="yen">' + yen(used) + '</b></div>' : '')
+      + '</section>';
+  }
+  function loadingCardHtml() {
+    return cardOpen('', '今月の日常予算')
+      + '<div class="b-head"><span class="b-title">今月の日常予算</span></div>'
+      + '<p class="b-loading">読み込み中…</p></section>';
+  }
+  function compactCardHtml(r) {
+    if (r.state === 'unset') return unsetCardHtml('今月の日常予算', '', null);
+    return cardOpen('compact', '今月の日常予算。タップで予算を変更')
+      + '<div class="b-head"><span class="b-title">今月の日常予算</span>' + paceBadge(r.state) + '</div>'
+      + remainBlock(r) + budgetBar(r)
+      + (r.state === 'over' ? '<p class="b-perday">' + budgetMsg(r) + '</p>' : perDayLine(r))
+      + '</section>';
+  }
+  function detailCardHtml(r, mLabel) {
+    if (r.state === 'unset') return unsetCardHtml(mLabel + 'の日常予算', mLabel + 'の日常の支出（' + r.day + '日まで）', r.used);
+    return cardOpen('detail', mLabel + 'の日常予算。タップで予算を変更')
+      + '<div class="b-head"><span class="b-title">' + mLabel + 'の日常予算</span>' + paceBadge(r.state) + '</div>'
+      + remainBlock(r) + budgetBar(r)
+      + '<div class="b-nums"><span>使った <b class="yen">' + yen(r.used) + '</b></span><span>予算 <b class="yen">' + yen(r.budget) + '</b></span></div>'
+      + perDayLine(r)
+      + '<p class="b-msg">' + budgetMsg(r) + '</p>'
+      + '<div class="pace-detail">'
+      + '<div class="row"><span>月の経過</span><b>' + r.day + ' / ' + r.days + '日（' + Math.round(r.elapsed * 100) + '%）</b></div>'
+      + '<div class="row"><span>予算を使った割合</span><b>' + Math.round(r.ratio * 100) + '%</b></div>'
+      + '</div>'
+      + '<div class="b-more"><span class="b-edit">予算を変える ›</span></div>'
+      + '</section>';
+  }
+  /** 過去の月：ペースではなく月の結果を出す */
+  function pastCardHtml(budget, used, mLabel) {
+    if (!budget) return unsetCardHtml(mLabel + 'の日常予算', mLabel + 'の日常の支出', used);
+    if (!used) {
+      return cardOpen('detail', mLabel + 'の日常予算')
+        + '<div class="b-head"><span class="b-title">' + mLabel + 'の日常予算</span></div>'
+        + '<p class="b-msg" style="margin:0">この月の日常の記録はありません。</p></section>';
+    }
+    var over = used > budget, pct = Math.round(used / budget * 100);
+    return cardOpen('detail', mLabel + 'の日常予算。タップで予算を変更')
+      + '<div class="b-head"><span class="b-title">' + mLabel + 'の日常予算</span>'
+      + (over ? paceBadge('over') : '<span class="pace ok"><span aria-hidden="true">◎</span>予算内</span>') + '</div>'
+      + '<div class="b-remain">' + (over
+        ? '<span class="b-amt over yen">予算を ' + yen(used - budget) + ' 超えました</span>'
+        : '<span class="b-label">おさえた額</span><span class="b-amt yen">' + yen(budget - used) + '</span>') + '</div>'
+      + '<div class="b-bar past' + (over ? ' over' : '') + '" role="img" aria-label="予算の' + pct + '%を使用">'
+      + '<div class="b-fill" style="width:' + Math.min(100, pct) + '%"></div></div>'
+      + '<div class="b-nums"><span>使った <b class="yen">' + yen(used) + '</b></span><span>予算 <b class="yen">' + yen(budget) + '</b></span></div>'
+      + '<p class="b-msg">' + (over ? '来月の参考にしましょう。' : '予算内でやりくりできました。') + '</p>'
+      + '</section>';
+  }
+  /** C. 先月の同じ日までとの比べ（今月を見ているときだけ） */
+  function compareCardHtml(now, prevToDate, prevHasData, prevMonth, day) {
+    var h = '<section class="card"><h2>先月との比べ</h2>';
+    if (!prevHasData) {
+      return h + '<p class="b-msg" style="margin:0">先月の記録がないため、まだ比べられません。来月からここに比べた結果が出ます。</p></section>';
+    }
+    if (prevToDate == null) return '';   // GAS が daily_to_date を返さない（未更新）ときは出さない
+    if (!now) {
+      return h + '<p class="b-msg" style="margin:0">今月の記録がまだありません。先月の今日までは <b class="yen">' + yen(prevToDate) + '</b> でした。</p></section>';
+    }
+    var d = prevToDate - now, cls, text;
+    if (Math.abs(d) < 500) { cls = 'same'; text = '先月の今日とほぼ同じペースです'; }
+    else if (d > 0) { cls = 'good'; text = '先月の今日より <span class="amt yen">' + yen(d) + '</span> おさえられています'; }
+    else { cls = 'more'; text = '先月の今日より <span class="amt yen">' + yen(-d) + '</span> 多めです'; }
+    var cm = +currentMonth().split('-')[1], pm = +(prevMonth || addMonth(currentMonth(), -1)).split('-')[1];
+    var pp = (prevMonth || addMonth(currentMonth(), -1)).split('-');
+    var pDays = new Date(+pp[0], +pp[1], 0).getDate();
+    var pTo = Math.min(day, pDays);
+    var mx = Math.max(now, prevToDate) || 1;
+    return h + '<p class="c-msg ' + cls + '">' + text + '</p>'
+      + '<div class="c-row"><div class="c-head"><span class="lbl">今月（' + cm + '/1〜' + cm + '/' + day + '）</span><b class="yen">' + yen(now) + '</b></div>'
+      + '<div class="c-track"><div class="c-fill now" style="width:' + (now / mx * 100) + '%"></div></div></div>'
+      + '<div class="c-row"><div class="c-head"><span class="lbl">先月（' + pm + '/1〜' + pm + '/' + pTo + '）</span><b class="yen">' + yen(prevToDate) + '</b></div>'
+      + '<div class="c-track"><div class="c-fill prev" style="width:' + (prevToDate / mx * 100) + '%"></div></div></div>'
+      + '<p class="c-note">日常の支出だけで比べています（臨時は含めません）。</p></section>';
+  }
+
+  /** 入力タブの予算カード（と、今月を見ているなら見るタブ）を描き直す */
+  function paintBudget() {
+    var md = monthDays();
+    var hasUsed = (bud.used != null && bud.month === currentMonth());
+    if (!hasUsed && bud.budget) el('budgetMini').innerHTML = loadingCardHtml();
+    else el('budgetMini').innerHTML = compactCardHtml(calcBudget(bud.budget, hasUsed ? bud.used : 0, md.day, md.days));
+    if (loaded.see && selMonth === currentMonth()) paintBudgetSee(null);
+  }
+
+  /** 見るタブの予算カードと先月比。d は renderSee に渡された集計（今月以外の月で使う） */
+  function paintBudgetSee(d) {
+    var mLabel = (+selMonth.split('-')[1]) + '月';
+    if (selMonth !== currentMonth()) {
+      var used = d && d.totals ? (Number(d.totals.daily) || 0) : 0;
+      el('budgetDetail').innerHTML = pastCardHtml(bud.budget, used, mLabel);
+      el('budgetCompare').innerHTML = '';
+      return;
+    }
+    var md = monthDays();
+    var hasUsed = (bud.used != null && bud.month === currentMonth());
+    var now = hasUsed ? bud.used : (d && d.totals ? (Number(d.totals.daily) || 0) : 0);
+    el('budgetDetail').innerHTML = detailCardHtml(calcBudget(bud.budget, now, md.day, md.days), mLabel);
+    el('budgetCompare').innerHTML = hasUsed ? compareCardHtml(now, bud.prevToDate, bud.prevHasData, bud.prevMonth, md.day) : '';
+  }
+
+  // カードのタップ・キーボード操作で設定シートを開く
+  ['budgetMini', 'budgetDetail'].forEach(function (id) {
+    el(id).addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('.budget')) openBudgetSheet();
+    });
+    el(id).addEventListener('keydown', function (e) {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('budget')) {
+        e.preventDefault(); openBudgetSheet();
+      }
+    });
+  });
+
+  // ===== D. 登録直後のひとこと（トースト・3秒） =====
+  var toastTimer = null;
+  function showToast(html) {
+    var t = el('toast');
+    t.innerHTML = '<span class="chk" aria-hidden="true">✓</span><span>' + html + '</span>';
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3000);
+  }
+  /**
+   * 登録直後のひとこと。count=登録件数、dailyAdded=今月分の日常の追加額、allExtra=すべて臨時か。
+   * 手元の累計に足して即表示し、裏で取り直す。
+   */
+  function toastAfterAdd(count, dailyAdded, allExtra) {
+    if (!count) return;
+    if (bud.used != null && bud.month === currentMonth()) bud.used += dailyAdded;
+    var head = count > 1 ? count + '件を登録しました' : '登録しました';
+    var text;
+    if (allExtra) text = head + '（臨時の支出なので、日常予算には含めません）';
+    else if (!bud.budget) text = head + '。予算を決めると、あといくら使えるか分かります';
+    else if (bud.used == null || bud.month !== currentMonth()) text = head;
+    else {
+      var md = monthDays(), r = calcBudget(bud.budget, bud.used, md.day, md.days);
+      if (r.state === 'over') text = head + '。予算を <b>' + yen(-r.remain) + '</b> 超えました。来月の参考にしましょう';
+      else if (r.state === 'early' || r.state === 'much') text = head + '。今月あと <b>' + yen(r.remain) + '</b> 使えます（1日 ' + yen(r.perDay) + ' が目安）';
+      else text = head + '。今月あと <b>' + yen(r.remain) + '</b> 使えます';
+    }
+    showToast(text);
+    paintBudget();
+    loadBudget();
+  }
+
+  // ===== E. 予算の設定シート =====
+  function digitsOf(s) { return String(s || '').replace(/[^0-9]/g, ''); }
+  function setBudgetInput(v) {
+    el('budgetInput').value = v ? Number(v).toLocaleString('ja-JP') : '';
+    markChips(v);
+  }
+  function markChips(v) {
+    Array.prototype.forEach.call(el('budgetChips').querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', String(b.getAttribute('data-v')) === String(v || ''));
+    });
+  }
+  function setBudgetErr(msg) {
+    el('budgetErr').textContent = msg || '';
+    el('budgetBox').classList.toggle('err', !!msg);
+  }
+  function openBudgetSheet() {
+    el('budgetSheetTitle').textContent = bud.budget ? '日常予算を変える' : '日常予算を決める';
+    setBudgetInput(bud.budget);
+    setBudgetErr('');
+    var hint = '';
+    if (bud.prevDaily) hint += '先月（' + monthJa(bud.prevMonth) + '）の日常の支出は <b class="yen">' + yen(bud.prevDaily) + '</b> でした。目安にどうぞ。<br>';
+    hint += '臨時の支出（家電・旅行など）は含めません。';
+    el('budgetHint').innerHTML = hint;
+    el('budgetClear').classList.toggle('hidden', !bud.budget);
+    el('budgetSheet').classList.remove('hidden');
+    el('budgetBg').classList.remove('hidden');
+    document.body.classList.add('sheet-open');
+  }
+  function closeBudgetSheet() {
+    el('budgetSheet').classList.add('hidden');
+    el('budgetBg').classList.add('hidden');
+    document.body.classList.remove('sheet-open');
+  }
+  function setBudgetBusy(on, label) {
+    var btn = el('budgetSave');
+    el('budgetSheet').classList.toggle('busy', !!on);
+    btn.disabled = !!on;
+    el('budgetCancel').disabled = !!on;
+    btn.innerHTML = on ? '<span class="spinner light"></span>' + (label || '保存中…') : '保存';
+  }
+  function postBudget(v, done) {
+    setBudgetBusy(true, v ? '保存中…' : '外しています…');
+    apiPost({ action: 'settings', daily_budget: v }).then(function (res) {
+      setBudgetBusy(false);
+      if (!res || !res.ok) { setBudgetErr('保存できませんでした（' + ((res && res.error) || '不明なエラー') + '）'); return; }
+      bud.budget = Number(res.daily_budget) > 0 ? Number(res.daily_budget) : null;
+      bud.settingsOk = true;
+      writeBudgetCache();
+      closeBudgetSheet();
+      paintBudget();
+      done();
+    }).catch(function () { setBudgetBusy(false); setBudgetErr('通信エラーです。電波のよいところでもう一度お試しください。'); });
+  }
+  el('budgetInput').addEventListener('input', function () {
+    var d = digitsOf(this.value);
+    this.value = d ? Number(d).toLocaleString('ja-JP') : '';
+    markChips(d ? Number(d) : '');
+    setBudgetErr('');
+  });
+  el('budgetChips').addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button') : null;
+    if (!b) return;
+    setBudgetInput(Number(b.getAttribute('data-v')));
+    setBudgetErr('');
+  });
+  el('budgetSave').addEventListener('click', function () {
+    var v = Number(digitsOf(el('budgetInput').value));
+    if (!v || v < 1) { setBudgetErr('1円以上の金額を入れてください。'); return; }
+    if (v >= 100000000) { setBudgetErr('1億円未満の金額を入れてください。'); return; }
+    postBudget(v, function () { showToast('日常予算を <b>' + yen(v) + '</b> にしました'); });
+  });
+  el('budgetClear').addEventListener('click', function () {
+    if (!confirm('日常予算の設定を外しますか？（あとからいつでも決め直せます）')) return;
+    postBudget(null, function () { showToast('日常予算の設定を外しました'); });
+  });
+  el('budgetCancel').addEventListener('click', closeBudgetSheet);
+  el('budgetBg').addEventListener('click', closeBudgetSheet);
+
   // ===== 下スワイプで更新 =====
   (function setupPullToRefresh() {
     var ptr = el('ptr'), ptrText = el('ptrText');
@@ -1019,7 +1398,7 @@
         ptr.style.height = '36px';
         if (activeView === 'seeView') loadSee();
         else if (activeView === 'fixView') syncFix({ force: true });
-        else syncFix({ silent: true, force: true });
+        else { syncFix({ silent: true, force: true }); loadBudget(); }
         setTimeout(reset, 600);
       } else reset();
       function reset() {
@@ -1035,5 +1414,5 @@
     el('shotList').innerHTML = '<li class="error">config.js に GAS_URL を設定してください</li>';
   }
   setSeg('review');
-  if (ensureAuth()) refreshBadge();
+  if (ensureAuth()) { refreshBadge(); paintBudget(); loadBudget(); }
 })();

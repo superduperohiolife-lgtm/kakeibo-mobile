@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#1f7a5a">
+  <meta name="theme-color" content="#466f54">
   <title>写真で家計簿</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -32,6 +32,9 @@
 
     <!-- ===== １．入力（撮影・写真・手入力） ===== -->
     <div id="captureView" class="view">
+      <!-- A. 今月の日常予算（コンパクト版）。中身は app.js が描く。タップで予算の設定シート -->
+      <div id="budgetMini"></div>
+
       <section class="card">
         <h2>支出を追加</h2>
         <div class="pick-row">
@@ -83,6 +86,10 @@
 
     <!-- ===== ３．見る ===== -->
     <div id="seeView" class="view hidden">
+      <!-- A. 日常予算（詳細版）と C. 先月比。中身は app.js が描く -->
+      <div id="budgetDetail"></div>
+      <div id="budgetCompare"></div>
+
       <section class="card dash-top">
         <div class="month-nav">
           <button id="monthPrev" class="nav-btn" aria-label="前の月">‹</button>
@@ -149,6 +156,31 @@
       <button id="sheetSave" class="primary">保存</button>
     </div>
   </div>
+
+  <!-- ===== 予算の設定シート（修正シートと同じ部品） ===== -->
+  <div id="budgetBg" class="sheet-bg hidden"></div>
+  <div id="budgetSheet" class="sheet hidden" role="dialog" aria-labelledby="budgetSheetTitle">
+    <div class="sheet-head"><h3 id="budgetSheetTitle">日常予算を決める</h3></div>
+    <div class="sheet-body">
+      <label class="fld" for="budgetInput">1か月の日常予算（毎月この額を使います）</label>
+      <div id="budgetBox" class="yen-input"><span>¥</span><input type="text" id="budgetInput" inputmode="numeric" placeholder="80,000" autocomplete="off"></div>
+      <p id="budgetErr" class="sheet-err"></p>
+      <div id="budgetChips" class="chips">
+        <button type="button" data-v="60000">¥60,000</button>
+        <button type="button" data-v="80000">¥80,000</button>
+        <button type="button" data-v="100000">¥100,000</button>
+      </div>
+      <p id="budgetHint" class="sheet-hint"></p>
+      <button type="button" id="budgetClear" class="link-btn hidden">予算を使わない（設定を外す）</button>
+    </div>
+    <div class="sheet-foot">
+      <button id="budgetCancel" class="ghost">キャンセル</button>
+      <button id="budgetSave" class="primary">保存</button>
+    </div>
+  </div>
+
+  <!-- ===== D. 登録直後のひとこと ===== -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <!-- ===== 写真の拡大表示 ===== -->
   <div id="lightbox" class="lightbox hidden">
